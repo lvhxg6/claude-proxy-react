@@ -30,8 +30,9 @@ def parse_glm_react_format(content: str) -> list:
         try:
             logger.debug(f"Processing tool_call block {i}: {match[:200]}...")
 
-            # Extract function name (more flexible: alphanumeric + underscore)
-            name_match = re.search(r'^([a-zA-Z_][a-zA-Z0-9_]*)', match.strip())
+            # Extract function name - stop at first < or whitespace
+            # This handles cases where function name is immediately followed by <arg_key>
+            name_match = re.search(r'^([a-zA-Z_][a-zA-Z0-9_]*)(?=\s|<|$)', match.strip())
             if not name_match:
                 logger.warning(f"Could not extract function name from tool_call block {i}")
                 logger.debug(f"Block content: {match}")
