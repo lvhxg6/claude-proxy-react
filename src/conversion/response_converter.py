@@ -14,37 +14,77 @@ def parse_glm_react_format(content: str) -> list:
     Returns list of tool call dicts with 'id', 'name', and 'arguments' keys.
     """
     tool_calls = []
+    logger = logging.getLogger(__name__)
 
-    # Find all <tool_call>...</tool_call> blocks
-    tool_call_pattern = r'<tool_call>(.*?)</tool_call>'
-    matches = re.findall(tool_call_pattern, content, re.DOTALL)
+    logger.debug(f"=== Parsing ReAct Format ===")
+    logger.debug(f"Content length: {len(content)}")
+    logger.debug(f"Content preview (first 500 chars): {content[:500]}")
 
-    for match in matches:
-        # Extract function name (first line/word before any tags)
-        name_match = re.match(r'^([^<\n]+)', match.strip())
-        if not name_match:
+    # Find all <tool_call>...</tool_call> blocks (case-insensitive, allow whitespace)
+    tool_call_pattern = r'<tool_call>\s*(.*?)\s*</tool_call>'
+    matches = re.findall(tool_call_pattern, content, re.DOTALL | re.IGNORECASE)
+
+    logger.debug(f"Found {len(matches)} tool_call blocks")
+
+    for i, match in enumerate(matches):
+        try:
+            logger.debug(f"Processing tool_call block {i}: {match[:200]}...")
+
+            # Extract function name (more flexible: alphanumeric + underscore)
+            name_match = re.search(r'^([a-zA-Z_][a-zA-Z0-9_]*)', match.strip())
+            if not name_match:
+                logger.warning(f"Could not extract function name from tool_call block {i}")
+                logger.debug(f"Block content: {match}")
+                continue
+
+            function_name = name_match.group(1).strip()
+            logger.debug(f"Extracted function name: {function_name}")
+
+            # Extract all arg_key/arg_value pairs (allow whitespace, case-insensitive)
+            arg_pattern = r'<arg_key>\s*(.*?)\s*</arg_key>\s*<arg_value>\s*(.*?)\s*</arg_value>'
+            args = re.findall(arg_pattern, match, re.DOTALL | re.IGNORECASE)
+
+            logger.debug(f"Found {len(args)} argument pairs")
+
+            # Build arguments dict
+            arguments = {}
+            for j, (key, value) in enumerate(args):
+                key = key.strip()
+                value = value.strip()
+
+                logger.debug(f"Arg {j}: key='{key}', value_length={len(value)}")
+
+                # Try to parse value as JSON (for complex types like arrays/objects)
+                try:
+                    parsed_value = json.loads(value)
+                    arguments[key] = parsed_value
+                    logger.debug(f"Successfully parsed arg '{key}' as JSON")
+                except json.JSONDecodeError:
+                    # Keep as string if not valid JSON
+                    arguments[key] = value
+                    logger.debug(f"Keeping arg '{key}' as string")
+
+            logger.debug(f"Final arguments: {json.dumps(arguments, ensure_ascii=False)[:200]}")
+
+            tool_calls.append({
+                'id': f'toolu_{uuid.uuid4().hex[:24]}',
+                'type': 'function',
+                'function': {
+                    'name': function_name,
+                    'arguments': json.dumps(arguments, ensure_ascii=False)
+                }
+            })
+
+            logger.debug(f"Successfully parsed tool call: {function_name}")
+
+        except Exception as e:
+            logger.error(f"Error parsing tool_call block {i}: {e}")
+            logger.error(f"Block content: {match[:500]}")
+            import traceback
+            logger.error(traceback.format_exc())
             continue
 
-        function_name = name_match.group(1).strip()
-
-        # Extract all arg_key/arg_value pairs
-        arg_pattern = r'<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>'
-        args = re.findall(arg_pattern, match, re.DOTALL)
-
-        # Build arguments dict
-        arguments = {}
-        for key, value in args:
-            arguments[key.strip()] = value.strip()
-
-        tool_calls.append({
-            'id': f'toolu_{uuid.uuid4().hex[:24]}',
-            'type': 'function',
-            'function': {
-                'name': function_name,
-                'arguments': json.dumps(arguments, ensure_ascii=False)
-            }
-        })
-
+    logger.debug(f"=== ReAct Parsing Complete: {len(tool_calls)} tool calls ===")
     return tool_calls
 
 
@@ -75,16 +115,28 @@ def convert_openai_to_claude_response(
     text_content = message.get("content")
     tool_calls = message.get("tool_calls", []) or []
 
+    response_logger.debug(f"=== Tool Call Detection ===")
+    response_logger.debug(f"text_content length: {len(text_content) if text_content else 0}")
+    response_logger.debug(f"tool_calls count (from OpenAI): {len(tool_calls)}")
+    response_logger.debug(f"Has <tool_call> tag: {'<tool_call>' in text_content if text_content else False}")
+
     # Parse ReAct format if tool_calls is empty but content has <tool_call> tags
     if text_content and not tool_calls and '<tool_call>' in text_content:
+        response_logger.debug(f"Attempting ReAct format parsing...")
+        response_logger.debug(f"Content preview: {text_content[:500]}")
+
         react_tool_calls = parse_glm_react_format(text_content)
+
+        response_logger.debug(f"Parsed {len(react_tool_calls)} tool calls from ReAct format")
         tool_calls.extend(react_tool_calls)
 
         # Clean content: remove <think> and <tool_call> tags
-        cleaned_content = re.sub(r'<think>.*?</think>', '', text_content, flags=re.DOTALL)
-        cleaned_content = re.sub(r'</think>', '', cleaned_content)  # Remove standalone closing tags
-        cleaned_content = re.sub(r'<tool_call>.*?</tool_call>', '', cleaned_content, flags=re.DOTALL)
+        cleaned_content = re.sub(r'<think>.*?</think>', '', text_content, flags=re.DOTALL | re.IGNORECASE)
+        cleaned_content = re.sub(r'</think>', '', cleaned_content, flags=re.IGNORECASE)  # Remove standalone closing tags
+        cleaned_content = re.sub(r'<tool_call>.*?</tool_call>', '', cleaned_content, flags=re.DOTALL | re.IGNORECASE)
         text_content = cleaned_content.strip()
+
+        response_logger.debug(f"Cleaned text_content length: {len(text_content)}")
 
     # Add text content
     if text_content:
@@ -452,22 +504,27 @@ async def convert_openai_streaming_to_claude_with_cancellation(
                             final_stop_reason = Constants.STOP_END_TURN
 
         # Process ReAct format content after stream ends
-        print(f"DEBUG STREAM: is_react_format={is_react_format}, content_buffer_len={len(content_buffer) if content_buffer else 0}")
+        logger.debug(f"=== Stream End: ReAct Format Processing ===")
+        logger.debug(f"is_react_format={is_react_format}, content_buffer_len={len(content_buffer) if content_buffer else 0}")
         if content_buffer:
-            print(f"DEBUG STREAM: content_buffer contains <tool_call>: {'<tool_call>' in content_buffer}")
-            print(f"DEBUG STREAM: content_buffer contains <think>: {'<think>' in content_buffer}")
-            print(f"DEBUG STREAM: content_buffer last 500 chars: {content_buffer[-500:] if len(content_buffer) > 500 else content_buffer}")
-        logger.debug(f"ReAct format detected: {is_react_format}, content_buffer length: {len(content_buffer) if content_buffer else 0}")
+            logger.debug(f"content_buffer contains <tool_call>: {'<tool_call>' in content_buffer}")
+            logger.debug(f"content_buffer contains <think>: {'<think>' in content_buffer}")
+            logger.debug(f"content_buffer preview (last 500 chars): {content_buffer[-500:] if len(content_buffer) > 500 else content_buffer}")
+
         if is_react_format and content_buffer:
+            logger.debug(f"Processing ReAct format content from stream...")
+
             # Parse ReAct format tool calls
             react_tool_calls = parse_glm_react_format(content_buffer)
             logger.debug(f"Parsed {len(react_tool_calls)} tool calls from ReAct format content")
 
-            # Clean content: remove <think> and <tool_call> tags
-            cleaned_content = re.sub(r'<think>.*?</think>', '', content_buffer, flags=re.DOTALL)
-            cleaned_content = re.sub(r'</think>', '', cleaned_content)  # Remove standalone closing tags
-            cleaned_content = re.sub(r'<tool_call>.*?</tool_call>', '', cleaned_content, flags=re.DOTALL)
+            # Clean content: remove <think> and <tool_call> tags (case-insensitive)
+            cleaned_content = re.sub(r'<think>.*?</think>', '', content_buffer, flags=re.DOTALL | re.IGNORECASE)
+            cleaned_content = re.sub(r'</think>', '', cleaned_content, flags=re.IGNORECASE)  # Remove standalone closing tags
+            cleaned_content = re.sub(r'<tool_call>.*?</tool_call>', '', cleaned_content, flags=re.DOTALL | re.IGNORECASE)
             cleaned_content = cleaned_content.strip()
+
+            logger.debug(f"Cleaned content length: {len(cleaned_content)}")
 
             # Send cleaned text if any
             if cleaned_content and not react_text_sent:
