@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Request, Header, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from datetime import datetime
 import uuid
+import json
 from typing import Optional
 
 from src.core.config import config
@@ -12,6 +13,7 @@ from src.conversion.request_converter import convert_claude_to_openai
 from src.conversion.response_converter import (
     convert_openai_to_claude_response,
     convert_openai_streaming_to_claude_with_cancellation,
+    convert_non_streaming_to_sse,
 )
 from src.core.model_manager import model_manager
 
@@ -67,7 +69,18 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
         if await http_request.is_disconnected():
             raise HTTPException(status_code=499, detail="Client disconnected")
 
-        if request.stream:
+        # Force non-streaming when tools are present (backend limitation: GLM-4.7-FP8
+        # sends finish_reason='tool_calls' but doesn't include actual tool_call data in streaming)
+        has_tools = bool(request.tools) and len(request.tools) > 0
+        client_wants_streaming = request.stream
+        use_streaming = request.stream and not has_tools
+
+        if has_tools and request.stream:
+            logger.debug("Tools present: using non-streaming backend but returning SSE format to client")
+            # Override stream parameter in the converted request
+            openai_request["stream"] = False
+
+        if use_streaming:
             # Streaming response - wrap in error handling
             try:
                 openai_stream = openai_client.create_chat_completion_stream(
@@ -103,14 +116,35 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
                 }
                 return JSONResponse(status_code=e.status_code, content=error_response)
         else:
-            # Non-streaming response
+            # Non-streaming backend call
+            logger.debug(f"=== Non-streaming backend request ===")
+            logger.debug(f"OpenAI Request: {json.dumps(openai_request, indent=2, ensure_ascii=False)}")
             openai_response = await openai_client.create_chat_completion(
                 openai_request, request_id
             )
+            logger.debug(f"OpenAI Response received, converting to Claude format...")
             claude_response = convert_openai_to_claude_response(
                 openai_response, request
             )
-            return claude_response
+            logger.debug(f"Claude response created with stop_reason: {claude_response.get('stop_reason')}")
+
+            # If client expects streaming format, convert to SSE
+            if client_wants_streaming:
+                logger.debug("Client expects streaming: converting non-streaming response to SSE format")
+                return StreamingResponse(
+                    convert_non_streaming_to_sse(claude_response, logger),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Headers": "*",
+                    },
+                )
+            else:
+                # Client expects non-streaming JSON response
+                logger.debug(f"Returning non-streaming Claude response")
+                return claude_response
     except HTTPException:
         raise
     except Exception as e:

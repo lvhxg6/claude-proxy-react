@@ -5,6 +5,7 @@ from typing import Optional, AsyncGenerator, Dict, Any
 from openai import AsyncOpenAI, AsyncAzureOpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai._exceptions import APIError, RateLimitError, AuthenticationError, BadRequestError
+import httpx
 
 class OpenAIClient:
     """Async OpenAI client with cancellation support."""
@@ -22,7 +23,13 @@ class OpenAIClient:
         
         # Merge custom headers with default headers
         all_headers = {**default_headers, **self.custom_headers}
-        
+
+        # Create httpx client without proxy
+        http_client = httpx.AsyncClient(
+            proxy=None,  # Disable proxy
+            timeout=timeout
+        )
+
         # Detect if using Azure and instantiate the appropriate client
         if api_version:
             self.client = AsyncAzureOpenAI(
@@ -30,26 +37,33 @@ class OpenAIClient:
                 azure_endpoint=base_url,
                 api_version=api_version,
                 timeout=timeout,
-                default_headers=all_headers
+                default_headers=all_headers,
+                http_client=http_client
             )
         else:
             self.client = AsyncOpenAI(
                 api_key=api_key,
                 base_url=base_url,
                 timeout=timeout,
-                default_headers=all_headers
+                default_headers=all_headers,
+                http_client=http_client
             )
         self.active_requests: Dict[str, asyncio.Event] = {}
     
     async def create_chat_completion(self, request: Dict[str, Any], request_id: Optional[str] = None) -> Dict[str, Any]:
         """Send chat completion to OpenAI API with cancellation support."""
-        
+
         # Create cancellation token if request_id provided
         if request_id:
             cancel_event = asyncio.Event()
             self.active_requests[request_id] = cancel_event
-        
+
         try:
+            # Log request details for debugging
+            from src.core.logging import logger
+            logger.info(f"Sending request to OpenAI API: model={request.get('model')}, stream={request.get('stream', False)}")
+            logger.debug(f"Full request: {json.dumps(request, ensure_ascii=False, indent=2)}")
+
             # Create task that can be cancelled
             completion_task = asyncio.create_task(
                 self.client.chat.completions.create(**request)
@@ -82,17 +96,30 @@ class OpenAIClient:
             
             # Convert to dict format that matches the original interface
             return completion.model_dump()
-        
+
         except AuthenticationError as e:
+            from src.core.logging import logger
+            logger.error(f"Authentication error: {str(e)}")
             raise HTTPException(status_code=401, detail=self.classify_openai_error(str(e)))
         except RateLimitError as e:
+            from src.core.logging import logger
+            logger.error(f"Rate limit error: {str(e)}")
             raise HTTPException(status_code=429, detail=self.classify_openai_error(str(e)))
         except BadRequestError as e:
+            from src.core.logging import logger
+            logger.error(f"Bad request error: {str(e)}")
             raise HTTPException(status_code=400, detail=self.classify_openai_error(str(e)))
         except APIError as e:
+            from src.core.logging import logger
             status_code = getattr(e, 'status_code', 500)
+            logger.error(f"API error (status {status_code}): {str(e)}")
+            logger.error(f"Error type: {type(e).__name__}, Error body: {getattr(e, 'body', 'N/A')}")
             raise HTTPException(status_code=status_code, detail=self.classify_openai_error(str(e)))
         except Exception as e:
+            from src.core.logging import logger
+            logger.error(f"Unexpected error: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
         
         finally:
@@ -131,17 +158,30 @@ class OpenAIClient:
             
             # Signal end of stream
             yield "data: [DONE]"
-                
+
         except AuthenticationError as e:
+            from src.core.logging import logger
+            logger.error(f"Streaming authentication error: {str(e)}")
             raise HTTPException(status_code=401, detail=self.classify_openai_error(str(e)))
         except RateLimitError as e:
+            from src.core.logging import logger
+            logger.error(f"Streaming rate limit error: {str(e)}")
             raise HTTPException(status_code=429, detail=self.classify_openai_error(str(e)))
         except BadRequestError as e:
+            from src.core.logging import logger
+            logger.error(f"Streaming bad request error: {str(e)}")
             raise HTTPException(status_code=400, detail=self.classify_openai_error(str(e)))
         except APIError as e:
+            from src.core.logging import logger
             status_code = getattr(e, 'status_code', 500)
+            logger.error(f"Streaming API error (status {status_code}): {str(e)}")
+            logger.error(f"Error type: {type(e).__name__}, Error body: {getattr(e, 'body', 'N/A')}")
             raise HTTPException(status_code=status_code, detail=self.classify_openai_error(str(e)))
         except Exception as e:
+            from src.core.logging import logger
+            logger.error(f"Streaming unexpected error: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
         
         finally:

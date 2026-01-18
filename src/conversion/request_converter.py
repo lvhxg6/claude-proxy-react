@@ -171,7 +171,7 @@ def convert_claude_assistant_message(msg: ClaudeMessage) -> Dict[str, Any]:
     tool_calls = []
 
     if msg.content is None:
-        return {"role": Constants.ROLE_ASSISTANT, "content": None}
+        return {"role": Constants.ROLE_ASSISTANT, "content": ""}
     
     if isinstance(msg.content, str):
         return {"role": Constants.ROLE_ASSISTANT, "content": msg.content}
@@ -197,7 +197,7 @@ def convert_claude_assistant_message(msg: ClaudeMessage) -> Dict[str, Any]:
     if text_parts:
         openai_message["content"] = "".join(text_parts)
     else:
-        openai_message["content"] = None
+        openai_message["content"] = ""
 
     # Set tool calls
     if tool_calls:
