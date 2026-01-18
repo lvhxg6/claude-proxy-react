@@ -242,7 +242,16 @@ Test proxy functionality:
 ```bash
 # Run comprehensive tests
 python src/test_claude_to_openai.py
+
+# Test ReAct format parsing (for GLM-4.7)
+python test_react_format.py
 ```
+
+## Documentation
+
+- [GLM-4.7 Integration Guide](docs/glm-4.7-integration.md) - Detailed guide for using GLM-4.7 with ReAct format
+- [Troubleshooting Guide](docs/troubleshooting.md) - Common issues and solutions
+- [CHANGELOG](CHANGELOG.md) - Version history and changes
 
 ## Development
 
