@@ -16,8 +16,17 @@ from src.conversion.response_converter import (
     convert_openai_to_claude_response,
     convert_openai_streaming_to_claude_with_cancellation,
     convert_non_streaming_to_sse,
+    convert_compaction_to_sse,
+    stream_compaction_with_response,
 )
 from src.core.model_manager import model_manager
+from src.core.compaction import (
+    should_compact,
+    build_compaction_messages,
+    build_followup_request,
+    build_compaction_response,
+    build_compaction_with_response,
+)
 
 router = APIRouter()
 
@@ -125,6 +134,22 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
             f"({effective_input/config.model_context_window*100:.1f}%), "
             f"max_tokens={openai_request.get('max_tokens')}"
         )
+
+        # === Compaction check ===
+        compaction_edit = should_compact(request, input_tokens)
+        if compaction_edit:
+            logger.info(f"[{short_id}] Compaction triggered, generating summary...")
+            try:
+                return await _handle_compaction(
+                    request, openai_request, compaction_edit,
+                    mapped_model, input_tokens, request_id, short_id,
+                    req_start, http_request,
+                )
+            except Exception as e:
+                logger.warning(f"[{short_id}] Compaction failed, falling back to normal flow: {e}")
+                import traceback
+                logger.warning(traceback.format_exc())
+                # Fall through to normal request flow
 
         # Check if client disconnected before processing
         if await http_request.is_disconnected():
@@ -242,6 +267,149 @@ async def _timed_streaming_wrapper(stream_gen, short_id: str, req_start: float):
     finally:
         total_elapsed = time.time() - req_start
         logger.info(f"[{short_id}] <<< Stream finished: total={total_elapsed:.3f}s, chunks={chunk_count}")
+
+
+async def _handle_compaction(
+    request, openai_request, compaction_edit,
+    mapped_model, input_tokens, request_id, short_id,
+    req_start, http_request,
+):
+    """Handle the compaction flow: summarize conversation, optionally continue with follow-up."""
+    # Determine which model to use for summarization
+    compaction_model = config.compaction_model or mapped_model
+
+    # Build summarization request
+    compaction_messages = build_compaction_messages(request, compaction_edit)
+    summary_request = {
+        "model": compaction_model,
+        "messages": compaction_messages,
+        "max_tokens": config.compaction_max_tokens,
+        "temperature": 0.3,
+        "stream": False,
+    }
+
+    # First LLM call: generate summary
+    summary_start = time.time()
+    logger.info(f"[{short_id}] Compaction: sending summary request to {compaction_model}")
+    summary_response = await openai_client.create_chat_completion(summary_request, request_id + "_compact")
+    summary_elapsed = time.time() - summary_start
+
+    # Extract summary text
+    summary_choices = summary_response.get("choices", [])
+    if not summary_choices:
+        raise RuntimeError("Compaction summary returned no choices")
+
+    summary = summary_choices[0].get("message", {}).get("content", "")
+    compaction_input_tokens = summary_response.get("usage", {}).get("prompt_tokens", 0)
+    compaction_output_tokens = summary_response.get("usage", {}).get("completion_tokens", 0)
+
+    logger.info(
+        f"[{short_id}] Compaction summary generated: {summary_elapsed:.3f}s, "
+        f"input={compaction_input_tokens}, output={compaction_output_tokens}, "
+        f"summary_len={len(summary)}"
+    )
+
+    compaction_usage = {
+        "input_tokens": compaction_input_tokens,
+        "output_tokens": compaction_output_tokens,
+    }
+
+    # pause_after_compaction=true: just return the compaction block
+    if compaction_edit.pause_after_compaction:
+        claude_response = build_compaction_response(
+            summary, request, compaction_input_tokens, compaction_output_tokens
+        )
+        total_elapsed = time.time() - req_start
+        logger.info(f"[{short_id}] <<< Compaction (pause) finished: total={total_elapsed:.3f}s")
+
+        if request.stream:
+            return StreamingResponse(
+                _timed_streaming_wrapper(
+                    convert_compaction_to_sse(claude_response, logger),
+                    short_id, req_start,
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "*",
+                },
+            )
+        else:
+            return claude_response
+
+    # pause_after_compaction=false: build follow-up request and continue
+    followup_request = build_followup_request(summary, request, mapped_model, openai_request)
+    has_tools = bool(request.tools) and len(request.tools) > 0
+    client_wants_streaming = request.stream
+
+    logger.info(f"[{short_id}] Compaction: sending follow-up request (stream={client_wants_streaming})")
+
+    if client_wants_streaming and not has_tools:
+        # Streaming follow-up
+        followup_request["stream"] = True
+        openai_stream = openai_client.create_chat_completion_stream(followup_request, request_id + "_followup")
+
+        return StreamingResponse(
+            _timed_streaming_wrapper(
+                stream_compaction_with_response(
+                    summary, openai_stream, request, logger,
+                    http_request, openai_client, request_id + "_followup",
+                    compaction_usage,
+                ),
+                short_id, req_start,
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*",
+            },
+        )
+    else:
+        # Non-streaming follow-up
+        followup_request["stream"] = False
+        followup_start = time.time()
+        followup_response = await openai_client.create_chat_completion(
+            followup_request, request_id + "_followup"
+        )
+        followup_elapsed = time.time() - followup_start
+        logger.info(f"[{short_id}] Compaction follow-up: {followup_elapsed:.3f}s")
+
+        # Convert follow-up response to Claude format
+        claude_followup = convert_openai_to_claude_response(followup_response, request)
+
+        # Build combined response
+        message_input_tokens = followup_response.get("usage", {}).get("prompt_tokens", 0)
+        message_output_tokens = followup_response.get("usage", {}).get("completion_tokens", 0)
+
+        combined_response = build_compaction_with_response(
+            summary,
+            claude_followup.get("content", []),
+            request,
+            claude_followup.get("stop_reason", Constants.STOP_END_TURN),
+            compaction_input_tokens, compaction_output_tokens,
+            message_input_tokens, message_output_tokens,
+        )
+
+        total_elapsed = time.time() - req_start
+        logger.info(f"[{short_id}] <<< Compaction+response finished: total={total_elapsed:.3f}s")
+
+        if client_wants_streaming:
+            return StreamingResponse(
+                convert_non_streaming_to_sse(combined_response, logger),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "*",
+                },
+            )
+        else:
+            return combined_response
 
 
 @router.post("/v1/messages/count_tokens")

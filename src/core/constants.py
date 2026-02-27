@@ -25,5 +25,10 @@ class Constants:
     EVENT_CONTENT_BLOCK_DELTA = "content_block_delta"
     EVENT_PING = "ping"
     
+    CONTENT_COMPACTION = "compaction"
+
     DELTA_TEXT = "text_delta"
     DELTA_INPUT_JSON = "input_json_delta"
+    DELTA_COMPACTION = "compaction_delta"
+
+    STOP_COMPACTION = "compaction"

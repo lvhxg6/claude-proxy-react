@@ -274,6 +274,47 @@ If you encounter issues not covered here:
 
 ## Known Limitations
 
+### Compaction (Auto-Compact) Issues
+
+#### Problem: "Context limit reached · /compact or /clear to continue"
+
+**Symptoms:**
+- Claude Code CLI stops working after long conversations
+- Shows "Context limit reached" message
+
+**Root Cause:**
+The CLI's auto-compact feature requires the proxy to support the Compaction API (`context_management.edits` in requests).
+
+**Solution (v1.1.0+):**
+Compaction is now supported by default. The proxy detects `context_management.edits` in requests and:
+1. Generates a conversation summary via the upstream LLM
+2. Returns a `compaction` content block to the CLI
+3. Continues the conversation with compressed context
+
+**Configuration:**
+```bash
+COMPACTION_ENABLED="true"       # Enable/disable (default: true)
+COMPACTION_MODEL=""             # Use a specific model for summarization (empty = same as request)
+COMPACTION_MAX_TOKENS="4096"    # Max tokens for the summary
+```
+
+**Debugging:**
+```bash
+# Check if compaction is triggering
+grep "Compaction triggered" logs/proxy_*.log
+
+# Check summary generation
+grep "Compaction summary generated" logs/proxy_*.log
+
+# If compaction fails, it falls back to normal flow with a warning
+grep "Compaction failed" logs/proxy_*.log
+```
+
+**Tips:**
+- If summaries are too short, increase `COMPACTION_MAX_TOKENS`
+- Use `COMPACTION_MODEL` to point to a cheaper/faster model for summarization
+- Set `LOG_LEVEL="DEBUG"` to see full compaction request/response details
+
 ### GLM-4.7-FP8 Specific
 
 1. **ReAct format only**: Does not support standard OpenAI function calling

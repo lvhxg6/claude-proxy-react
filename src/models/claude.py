@@ -36,6 +36,19 @@ class ClaudeTool(BaseModel):
 class ClaudeThinkingConfig(BaseModel):
     enabled: bool = True
 
+class CompactionTrigger(BaseModel):
+    type: Literal["input_tokens"] = "input_tokens"
+    value: int = 150000
+
+class CompactionEdit(BaseModel):
+    type: str = "compact_20260112"
+    trigger: Optional[CompactionTrigger] = None
+    pause_after_compaction: bool = False
+    instructions: Optional[str] = None
+
+class ContextManagement(BaseModel):
+    edits: List[CompactionEdit] = []
+
 class ClaudeMessagesRequest(BaseModel):
     model: str
     max_tokens: int
@@ -50,6 +63,7 @@ class ClaudeMessagesRequest(BaseModel):
     tools: Optional[List[ClaudeTool]] = None
     tool_choice: Optional[Dict[str, Any]] = None
     thinking: Optional[ClaudeThinkingConfig] = None
+    context_management: Optional[ContextManagement] = None
 
 class ClaudeTokenCountRequest(BaseModel):
     model: str

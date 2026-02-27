@@ -37,6 +37,11 @@ class Config:
         self.token_estimate_factor = float(os.environ.get("TOKEN_ESTIMATE_FACTOR", "1.30"))
         # Provider's max output tokens limit
         self.max_output_tokens = int(os.environ.get("MAX_OUTPUT_TOKENS", "16384"))
+
+        # Compaction settings
+        self.compaction_enabled = os.environ.get("COMPACTION_ENABLED", "true").lower() == "true"
+        self.compaction_model = os.environ.get("COMPACTION_MODEL", None) or None  # None = use request model
+        self.compaction_max_tokens = int(os.environ.get("COMPACTION_MAX_TOKENS", "4096"))
         
     def validate_api_key(self):
         """Basic API key validation"""

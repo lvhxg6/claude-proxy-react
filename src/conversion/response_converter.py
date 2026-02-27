@@ -750,6 +750,16 @@ async def convert_non_streaming_to_sse(claude_response: dict, logger):
             # Send content_block_stop
             yield f"event: {Constants.EVENT_CONTENT_BLOCK_STOP}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_STOP, 'index': index}, ensure_ascii=False)}\n\n"
 
+        elif block_type == Constants.CONTENT_COMPACTION:
+            # Compaction content block
+            summary = block.get('content', '')
+
+            yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': index, 'content_block': {'type': Constants.CONTENT_COMPACTION, 'content': ''}}, ensure_ascii=False)}\n\n"
+
+            yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': index, 'delta': {'type': Constants.DELTA_COMPACTION, 'content': summary}}, ensure_ascii=False)}\n\n"
+
+            yield f"event: {Constants.EVENT_CONTENT_BLOCK_STOP}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_STOP, 'index': index}, ensure_ascii=False)}\n\n"
+
     # 4. Send message_delta with stop_reason and usage
     yield f"event: {Constants.EVENT_MESSAGE_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_DELTA, 'delta': {'stop_reason': stop_reason, 'stop_sequence': None}, 'usage': usage}, ensure_ascii=False)}\n\n"
 
@@ -757,3 +767,260 @@ async def convert_non_streaming_to_sse(claude_response: dict, logger):
     yield f"event: {Constants.EVENT_MESSAGE_STOP}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_STOP}, ensure_ascii=False)}\n\n"
 
     logger.debug(f"SSE conversion complete: stop_reason={stop_reason}")
+
+
+async def convert_compaction_to_sse(claude_response: dict, logger):
+    """Convert a compaction-only response to SSE streaming format.
+
+    Used when pause_after_compaction=true.
+    """
+    message_id = claude_response.get('id', f'msg_{uuid.uuid4().hex[:24]}')
+    model = claude_response.get('model', '')
+    content_blocks = claude_response.get('content', [])
+    stop_reason = claude_response.get('stop_reason', Constants.STOP_COMPACTION)
+    usage = claude_response.get('usage', {'input_tokens': 0, 'output_tokens': 0})
+
+    # 1. message_start
+    yield f"event: {Constants.EVENT_MESSAGE_START}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_START, 'message': {'id': message_id, 'type': 'message', 'role': Constants.ROLE_ASSISTANT, 'model': model, 'content': [], 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 0, 'output_tokens': 0}}}, ensure_ascii=False)}\n\n"
+
+    # 2. ping
+    yield f"event: {Constants.EVENT_PING}\ndata: {json.dumps({'type': Constants.EVENT_PING}, ensure_ascii=False)}\n\n"
+
+    # 3. compaction content block
+    for index, block in enumerate(content_blocks):
+        if block.get('type') == Constants.CONTENT_COMPACTION:
+            summary = block.get('content', '')
+
+            # content_block_start
+            yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': index, 'content_block': {'type': Constants.CONTENT_COMPACTION, 'content': ''}}, ensure_ascii=False)}\n\n"
+
+            # single content_block_delta with full summary
+            yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': index, 'delta': {'type': Constants.DELTA_COMPACTION, 'content': summary}}, ensure_ascii=False)}\n\n"
+
+            # content_block_stop
+            yield f"event: {Constants.EVENT_CONTENT_BLOCK_STOP}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_STOP, 'index': index}, ensure_ascii=False)}\n\n"
+
+    # 4. message_delta
+    yield f"event: {Constants.EVENT_MESSAGE_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_DELTA, 'delta': {'stop_reason': stop_reason, 'stop_sequence': None}, 'usage': usage}, ensure_ascii=False)}\n\n"
+
+    # 5. message_stop
+    yield f"event: {Constants.EVENT_MESSAGE_STOP}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_STOP}, ensure_ascii=False)}\n\n"
+
+    logger.debug(f"Compaction SSE complete: stop_reason={stop_reason}")
+
+
+async def stream_compaction_with_response(
+    summary: str,
+    openai_stream,
+    original_request,
+    logger,
+    http_request,
+    openai_client,
+    request_id: str,
+    compaction_usage: dict,
+):
+    """Stream compaction block followed by normal response content.
+
+    Used when pause_after_compaction=false. Emits:
+    1. message_start
+    2. ping
+    3. compaction block (index=0)
+    4. normal content blocks from upstream (index=1+)
+    5. message_delta + message_stop
+    """
+    message_id = f"msg_{uuid.uuid4().hex[:24]}"
+
+    # 1. message_start
+    yield f"event: {Constants.EVENT_MESSAGE_START}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_START, 'message': {'id': message_id, 'type': 'message', 'role': Constants.ROLE_ASSISTANT, 'model': original_request.model, 'content': [], 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 0, 'output_tokens': 0}}}, ensure_ascii=False)}\n\n"
+
+    # 2. ping
+    yield f"event: {Constants.EVENT_PING}\ndata: {json.dumps({'type': Constants.EVENT_PING}, ensure_ascii=False)}\n\n"
+
+    # 3. compaction block at index 0
+    yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': 0, 'content_block': {'type': Constants.CONTENT_COMPACTION, 'content': ''}}, ensure_ascii=False)}\n\n"
+
+    yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': 0, 'delta': {'type': Constants.DELTA_COMPACTION, 'content': summary}}, ensure_ascii=False)}\n\n"
+
+    yield f"event: {Constants.EVENT_CONTENT_BLOCK_STOP}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_STOP, 'index': 0}, ensure_ascii=False)}\n\n"
+
+    # 4. Stream normal content from upstream (offset all indices by 1)
+    # text block starts at index 1
+    text_block_index = 1
+    yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': text_block_index, 'content_block': {'type': Constants.CONTENT_TEXT, 'text': ''}}, ensure_ascii=False)}\n\n"
+
+    tool_block_counter = 0
+    current_tool_calls = {}
+    final_stop_reason = Constants.STOP_END_TURN
+    usage_data = {"input_tokens": 0, "output_tokens": 0}
+
+    # ReAct format detection
+    content_buffer = ""
+    is_react_format = False
+
+    try:
+        async for line in openai_stream:
+            if await http_request.is_disconnected():
+                logger.info(f"Client disconnected during compaction+response stream {request_id}")
+                openai_client.cancel_request(request_id)
+                break
+
+            if line.strip():
+                if line.startswith("data: "):
+                    chunk_data = line[6:]
+                    if chunk_data.strip() == "[DONE]":
+                        break
+
+                    try:
+                        chunk = json.loads(chunk_data)
+                        usage = chunk.get("usage", None)
+                        if usage:
+                            cache_read_input_tokens = 0
+                            prompt_tokens_details = usage.get('prompt_tokens_details', {})
+                            if prompt_tokens_details:
+                                cache_read_input_tokens = prompt_tokens_details.get('cached_tokens', 0)
+                            usage_data = {
+                                'input_tokens': usage.get('prompt_tokens', 0),
+                                'output_tokens': usage.get('completion_tokens', 0),
+                                'cache_read_input_tokens': cache_read_input_tokens
+                            }
+                        choices = chunk.get("choices", [])
+                        if not choices:
+                            continue
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse chunk: {chunk_data}, error: {e}")
+                        continue
+
+                    choice = choices[0]
+                    delta = choice.get("delta", {})
+                    finish_reason = choice.get("finish_reason")
+
+                    # Handle text delta
+                    if delta and "content" in delta and delta["content"] is not None:
+                        content_buffer += delta["content"]
+
+                        if not is_react_format and ('<think>' in content_buffer or '<tool_call>' in content_buffer):
+                            is_react_format = True
+
+                        if not is_react_format:
+                            yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': text_block_index, 'delta': {'type': Constants.DELTA_TEXT, 'text': delta['content']}}, ensure_ascii=False)}\n\n"
+
+                    # Handle tool call deltas
+                    if "tool_calls" in delta and delta["tool_calls"]:
+                        for tc_delta in delta["tool_calls"]:
+                            tc_index = tc_delta.get("index", 0)
+
+                            if tc_index not in current_tool_calls:
+                                current_tool_calls[tc_index] = {
+                                    "id": None, "name": None, "args_buffer": "",
+                                    "json_sent": False, "claude_index": None, "started": False
+                                }
+
+                            tool_call = current_tool_calls[tc_index]
+
+                            if tc_delta.get("id"):
+                                tool_call["id"] = tc_delta["id"]
+
+                            function_data = tc_delta.get(Constants.TOOL_FUNCTION, {})
+                            if function_data.get("name"):
+                                raw_name = function_data["name"]
+                                cleaned_name, extracted_args = parse_tool_name_and_args(raw_name)
+                                tool_call["name"] = cleaned_name
+                                if extracted_args:
+                                    tool_call["args_buffer"] = json.dumps(extracted_args, ensure_ascii=False)
+
+                            if tool_call["id"] and tool_call["name"] and not tool_call["started"]:
+                                tool_block_counter += 1
+                                claude_index = text_block_index + tool_block_counter
+                                tool_call["claude_index"] = claude_index
+                                tool_call["started"] = True
+
+                                yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': claude_index, 'content_block': {'type': Constants.CONTENT_TOOL_USE, 'id': tool_call['id'], 'name': tool_call['name'], 'input': {}}}, ensure_ascii=False)}\n\n"
+
+                            if "arguments" in function_data and tool_call["started"] and function_data["arguments"] is not None:
+                                tool_call["args_buffer"] += function_data["arguments"]
+                                try:
+                                    json.loads(tool_call["args_buffer"])
+                                    yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': tool_call['claude_index'], 'delta': {'type': Constants.DELTA_INPUT_JSON, 'partial_json': tool_call['args_buffer']}}, ensure_ascii=False)}\n\n"
+                                except json.JSONDecodeError:
+                                    pass
+
+                    if finish_reason:
+                        if finish_reason == "length":
+                            final_stop_reason = Constants.STOP_MAX_TOKENS
+                        elif finish_reason in ["tool_calls", "function_call"]:
+                            final_stop_reason = Constants.STOP_TOOL_USE
+                        elif finish_reason == "stop":
+                            final_stop_reason = Constants.STOP_END_TURN
+
+        # Process ReAct format if detected
+        if is_react_format and content_buffer:
+            react_tool_calls = parse_glm_react_format(content_buffer)
+
+            cleaned_content = re.sub(r'<think>.*?</think>', '', content_buffer, flags=re.DOTALL | re.IGNORECASE)
+            cleaned_content = re.sub(r'</think>', '', cleaned_content, flags=re.IGNORECASE)
+            cleaned_content = re.sub(r'<tool_call>.*?</tool_call>', '', cleaned_content, flags=re.DOTALL | re.IGNORECASE)
+            cleaned_content = cleaned_content.strip()
+
+            if cleaned_content:
+                yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': text_block_index, 'delta': {'type': Constants.DELTA_TEXT, 'text': cleaned_content}}, ensure_ascii=False)}\n\n"
+
+            for tool_call_data in react_tool_calls:
+                tool_block_counter += 1
+                claude_index = text_block_index + tool_block_counter
+                function_data = tool_call_data.get('function', {})
+                tool_id = tool_call_data.get('id', f'toolu_{uuid.uuid4().hex[:24]}')
+                tool_name = function_data.get('name', '')
+                try:
+                    arguments = json.loads(function_data.get('arguments', ''))
+                except json.JSONDecodeError:
+                    arguments = {}
+
+                yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': claude_index, 'content_block': {'type': Constants.CONTENT_TOOL_USE, 'id': tool_id, 'name': tool_name, 'input': {}}}, ensure_ascii=False)}\n\n"
+                if arguments:
+                    yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': claude_index, 'delta': {'type': Constants.DELTA_INPUT_JSON, 'partial_json': json.dumps(arguments, ensure_ascii=False)}}, ensure_ascii=False)}\n\n"
+                yield f"event: {Constants.EVENT_CONTENT_BLOCK_STOP}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_STOP, 'index': claude_index}, ensure_ascii=False)}\n\n"
+
+            if react_tool_calls:
+                final_stop_reason = Constants.STOP_TOOL_USE
+
+    except Exception as e:
+        logger.error(f"Compaction+response streaming error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        error_event = {
+            "type": "error",
+            "error": {"type": "api_error", "message": f"Streaming error: {str(e)}"},
+        }
+        yield f"event: error\ndata: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+        return
+
+    # Close text block
+    yield f"event: {Constants.EVENT_CONTENT_BLOCK_STOP}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_STOP, 'index': text_block_index}, ensure_ascii=False)}\n\n"
+
+    # Close tool blocks
+    for tool_data in current_tool_calls.values():
+        if tool_data.get("started") and tool_data.get("claude_index") is not None:
+            yield f"event: {Constants.EVENT_CONTENT_BLOCK_STOP}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_STOP, 'index': tool_data['claude_index']}, ensure_ascii=False)}\n\n"
+
+    # Build combined usage with iterations
+    combined_usage = {
+        "input_tokens": usage_data.get("input_tokens", 0),
+        "output_tokens": compaction_usage.get("output_tokens", 0) + usage_data.get("output_tokens", 0),
+        "iterations": [
+            {
+                "type": "compaction",
+                "input_tokens": compaction_usage.get("input_tokens", 0),
+                "output_tokens": compaction_usage.get("output_tokens", 0),
+            },
+            {
+                "type": "message",
+                "input_tokens": usage_data.get("input_tokens", 0),
+                "output_tokens": usage_data.get("output_tokens", 0),
+            },
+        ],
+    }
+
+    yield f"event: {Constants.EVENT_MESSAGE_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_DELTA, 'delta': {'stop_reason': final_stop_reason, 'stop_sequence': None}, 'usage': combined_usage}, ensure_ascii=False)}\n\n"
+    yield f"event: {Constants.EVENT_MESSAGE_STOP}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_STOP}, ensure_ascii=False)}\n\n"
+
+    logger.debug(f"Compaction+response SSE complete: stop_reason={final_stop_reason}")
