@@ -192,10 +192,13 @@ ANTHROPIC_BASE_URL=http://localhost:8082 ANTHROPIC_API_KEY="exact-matching-key" 
 2. **Tune token estimation and output cap**:
    The proxy applies a correction factor to compensate for local tokenizer underestimation, and clamps output to the provider's limit:
    ```bash
-   TOKEN_ESTIMATE_FACTOR="1.30"  # Increase if upstream still rejects (local tokenizer underestimates ~27%)
-   MAX_OUTPUT_TOKENS="16384"     # Set to your provider's max output/completion tokens
+   TOKEN_ESTIMATE_FACTOR="1.30"      # Increase if upstream still rejects (local tokenizer underestimates ~27%)
+   MAX_OUTPUT_TOKENS="16384"         # Set to your provider's max output/completion tokens
+   COMPACTION_TRIGGER_RATIO="0.96"   # Auto-compaction when effective_input exceeds window * ratio
    ```
    The proxy uses triple clamping: `min(user_max_tokens, allowed_by_window, provider_output_cap)`.
+   Compaction will auto-trigger when `effective_input` exceeds `MODEL_CONTEXT_WINDOW * COMPACTION_TRIGGER_RATIO`,
+   even if the CLI did not send a context_management edit or its trigger is higher than the model window.
 
 3. **Check for memory leaks**:
    ```bash

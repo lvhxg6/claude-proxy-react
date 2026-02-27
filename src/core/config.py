@@ -37,6 +37,8 @@ class Config:
         self.token_estimate_factor = float(os.environ.get("TOKEN_ESTIMATE_FACTOR", "1.30"))
         # Provider's max output tokens limit
         self.max_output_tokens = int(os.environ.get("MAX_OUTPUT_TOKENS", "16384"))
+        # Auto compaction trigger ratio (relative to context window)
+        self.compaction_trigger_ratio = float(os.environ.get("COMPACTION_TRIGGER_RATIO", "0.96"))
 
         # Compaction settings
         self.compaction_enabled = os.environ.get("COMPACTION_ENABLED", "true").lower() == "true"

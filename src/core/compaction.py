@@ -31,28 +31,37 @@ def should_compact(
 ) -> Optional[CompactionEdit]:
     """Check if compaction should be triggered.
 
-    Args:
-        request: The Claude request containing context_management config.
-        effective_input: Token count after applying estimation factor,
-            which is more conservative than raw and prevents missed triggers.
-
-    Returns the CompactionEdit if triggered, None otherwise.
+    Strategy:
+    1) 尊重客户端的 compaction edit，但把触发值上限限定在模型窗口比例内。
+    2) 若客户端未提供或未触发，在逼近窗口时自动触发，避免 400。
     """
     if not config.compaction_enabled:
         return None
 
-    if not request.context_management:
-        return None
+    auto_trigger = int(config.model_context_window * config.compaction_trigger_ratio)
 
-    for edit in request.context_management.edits:
-        if edit.type == "compact_20260112":
-            trigger_value = edit.trigger.value if edit.trigger else 150000
-            if effective_input >= trigger_value:
-                logger.info(
-                    f"Compaction triggered: effective_input={effective_input} >= "
-                    f"trigger={trigger_value}"
-                )
-                return edit
+    # 1) 客户端带了 context_management 的情况
+    if request.context_management:
+        for edit in request.context_management.edits:
+            if edit.type == "compact_20260112":
+                client_trigger = edit.trigger.value if edit.trigger else 150000
+                effective_trigger = min(client_trigger, auto_trigger)
+                if effective_input >= effective_trigger:
+                    logger.info(
+                        "Compaction triggered (client edit): "
+                        f"effective_input={effective_input} >= trigger={effective_trigger} "
+                        f"(client={client_trigger}, auto_cap={auto_trigger})"
+                    )
+                    return edit
+
+    # 2) 无 context_management 或未触发时的自动压缩
+    if effective_input >= auto_trigger:
+        logger.info(
+            "Compaction triggered (auto): "
+            f"effective_input={effective_input} >= auto_trigger={auto_trigger}"
+        )
+        return CompactionEdit()
+
     return None
 
 
