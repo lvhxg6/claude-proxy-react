@@ -89,6 +89,60 @@ def parse_glm_react_format(content: str) -> list:
     return tool_calls
 
 
+def parse_tool_name_and_args(tool_name: str) -> tuple:
+    """Parse tool name and arguments from GLM's mixed format.
+
+    GLM-4.7 sometimes returns tool names with embedded ReAct format:
+    "Write<arg_key>file_path</arg_key><arg_value>/path/to/file</arg_value>"
+
+    Returns: (cleaned_name, arguments_dict)
+    """
+    if not tool_name:
+        return tool_name, {}
+
+    # Check if name contains ReAct format
+    if '<arg_key>' not in tool_name:
+        # No ReAct format, return as-is
+        return tool_name, {}
+
+    # Extract function name - stop at first < or whitespace
+    name_match = re.search(r'^([a-zA-Z_][a-zA-Z0-9_]*)(?=\s|<|$)', tool_name.strip())
+    if not name_match:
+        return tool_name, {}
+
+    cleaned_name = name_match.group(1).strip()
+
+    # Extract all arg_key/arg_value pairs
+    arg_pattern = r'<arg_key>\s*(.*?)\s*</arg_key>\s*<arg_value>\s*(.*?)\s*</arg_value>'
+    args = re.findall(arg_pattern, tool_name, re.DOTALL | re.IGNORECASE)
+
+    # Build arguments dict
+    arguments = {}
+    for key, value in args:
+        key = key.strip()
+        value = value.strip()
+
+        # Try to parse value as JSON (for complex types)
+        try:
+            parsed_value = json.loads(value)
+            arguments[key] = parsed_value
+        except json.JSONDecodeError:
+            # Keep as string if not valid JSON
+            arguments[key] = value
+
+    return cleaned_name, arguments
+
+
+def clean_tool_name(tool_name: str) -> str:
+    """Clean tool name by removing ReAct format tags.
+
+    This is a wrapper for backward compatibility.
+    Use parse_tool_name_and_args() for full functionality.
+    """
+    cleaned_name, _ = parse_tool_name_and_args(tool_name)
+    return cleaned_name
+
+
 import logging
 
 response_logger = logging.getLogger(__name__)
@@ -160,11 +214,26 @@ def convert_openai_to_claude_response(
             else:
                 tool_id = tool_id if tool_id else f"toolu_{uuid.uuid4().hex[:24]}"
 
+            # Parse tool name and extract embedded arguments (if any)
+            raw_name = function_data.get("name", "")
+            cleaned_name, extracted_args = parse_tool_name_and_args(raw_name)
+
+            # Merge extracted arguments with existing arguments
+            if not arguments and extracted_args:
+                arguments = extracted_args
+                response_logger.debug(f"Extracted {len(extracted_args)} arguments from tool name: {list(extracted_args.keys())}")
+            elif extracted_args:
+                arguments.update(extracted_args)
+                response_logger.debug(f"Merged {len(extracted_args)} extracted arguments: {list(extracted_args.keys())}")
+
+            if raw_name != cleaned_name:
+                response_logger.debug(f"Cleaned tool name in non-streaming: '{raw_name}' -> '{cleaned_name}'")
+
             content_blocks.append(
                 {
                     "type": Constants.CONTENT_TOOL_USE,
                     "id": tool_id,
-                    "name": function_data.get("name", ""),
+                    "name": cleaned_name,
                     "input": arguments,
                 }
             )
@@ -291,7 +360,19 @@ async def convert_openai_streaming_to_claude(
                             # Update function name and start content block if we have both id and name
                             function_data = tc_delta.get(Constants.TOOL_FUNCTION, {})
                             if function_data.get("name"):
-                                tool_call["name"] = function_data["name"]
+                                # Parse tool name and extract embedded arguments (if any)
+                                raw_name = function_data["name"]
+                                cleaned_name, extracted_args = parse_tool_name_and_args(raw_name)
+
+                                if raw_name != cleaned_name:
+                                    logger.debug(f"Cleaned tool name: '{raw_name}' -> '{cleaned_name}'")
+
+                                tool_call["name"] = cleaned_name
+
+                                # If we extracted arguments from the name, add them to args_buffer
+                                if extracted_args:
+                                    tool_call["args_buffer"] = json.dumps(extracted_args, ensure_ascii=False)
+                                    logger.debug(f"Extracted {len(extracted_args)} arguments from tool name: {list(extracted_args.keys())}")
                             
                             # Start content block when we have complete initial data
                             if (tool_call["id"] and tool_call["name"] and not tool_call["started"]):
@@ -425,8 +506,8 @@ async def convert_openai_streaming_to_claude_with_cancellation(
                     finish_reason = choice.get("finish_reason")
 
                     # Debug: log the raw delta content
-                    if delta:
-                        logger.debug(f"Raw delta content: {delta}")
+                    # if delta:
+                    #     logger.debug(f"Raw delta content: {delta}")
 
                     # Handle text delta
                     if delta and "content" in delta and delta["content"] is not None:
@@ -466,7 +547,19 @@ async def convert_openai_streaming_to_claude_with_cancellation(
                             # Update function name and start content block if we have both id and name
                             function_data = tc_delta.get(Constants.TOOL_FUNCTION, {})
                             if function_data.get("name"):
-                                tool_call["name"] = function_data["name"]
+                                # Parse tool name and extract embedded arguments (if any)
+                                raw_name = function_data["name"]
+                                cleaned_name, extracted_args = parse_tool_name_and_args(raw_name)
+
+                                if raw_name != cleaned_name:
+                                    logger.debug(f"Cleaned tool name: '{raw_name}' -> '{cleaned_name}'")
+
+                                tool_call["name"] = cleaned_name
+
+                                # If we extracted arguments from the name, add them to args_buffer
+                                if extracted_args:
+                                    tool_call["args_buffer"] = json.dumps(extracted_args, ensure_ascii=False)
+                                    logger.debug(f"Extracted {len(extracted_args)} arguments from tool name: {list(extracted_args.keys())}")
                             
                             # Start content block when we have complete initial data
                             if (tool_call["id"] and tool_call["name"] and not tool_call["started"]):
