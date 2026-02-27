@@ -28,8 +28,13 @@ else
     echo "没有发现已有进程"
 fi
 
+# 环境变量配置
+export REQUEST_TIMEOUT=300        # 上游API超时(秒)，GLM-4.7响应较慢建议300
+export LOG_LEVEL=INFO              # 日志级别: DEBUG/INFO/WARNING/ERROR
+
 # 启动新进程
 echo "启动代理服务器..."
+echo "  REQUEST_TIMEOUT=${REQUEST_TIMEOUT}s, LOG_LEVEL=${LOG_LEVEL}"
 if command -v uv &> /dev/null; then
     uv run claude-code-proxy
 else
