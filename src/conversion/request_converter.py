@@ -5,8 +5,78 @@ from src.core.constants import Constants
 from src.models.claude import ClaudeMessagesRequest, ClaudeMessage
 from src.core.config import config
 import logging
+import tiktoken
 
 logger = logging.getLogger(__name__)
+
+
+def count_message_tokens(messages: List[Dict[str, Any]], model: str) -> int:
+    """
+    Count tokens in OpenAI format messages using tiktoken.
+
+    Args:
+        messages: List of OpenAI format messages
+        model: Model name for encoding selection
+
+    Returns:
+        Estimated token count
+    """
+    try:
+        # Try to get encoding for the specific model
+        try:
+            encoding = tiktoken.encoding_for_model(model)
+        except KeyError:
+            # Fallback to cl100k_base encoding (used by gpt-4, gpt-3.5-turbo, etc.)
+            encoding = tiktoken.get_encoding("cl100k_base")
+
+        num_tokens = 0
+
+        for message in messages:
+            # Every message follows <|start|>{role/name}\n{content}<|end|>\n
+            num_tokens += 4  # Base tokens per message
+
+            for key, value in message.items():
+                if key == "role":
+                    num_tokens += len(encoding.encode(value))
+                elif key == "content":
+                    if isinstance(value, str):
+                        num_tokens += len(encoding.encode(value))
+                    elif isinstance(value, list):
+                        # Handle multimodal content
+                        for item in value:
+                            if isinstance(item, dict):
+                                if item.get("type") == "text":
+                                    num_tokens += len(encoding.encode(item.get("text", "")))
+                                elif item.get("type") == "image_url":
+                                    # Rough estimate for images (varies by size)
+                                    num_tokens += 85
+                elif key == "name":
+                    num_tokens += len(encoding.encode(value))
+                elif key == "tool_calls":
+                    # Count tokens in tool calls
+                    for tool_call in value:
+                        if isinstance(tool_call, dict):
+                            num_tokens += len(encoding.encode(json.dumps(tool_call, ensure_ascii=False)))
+                elif key == "tool_call_id":
+                    num_tokens += len(encoding.encode(value))
+
+        num_tokens += 2  # Every reply is primed with <|start|>assistant
+
+        return num_tokens
+
+    except Exception as e:
+        logger.warning(f"Error counting tokens with tiktoken: {e}, falling back to character estimation")
+        # Fallback: rough character-based estimation
+        total_chars = 0
+        for message in messages:
+            content = message.get("content", "")
+            if isinstance(content, str):
+                total_chars += len(content)
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        total_chars += len(item.get("text", ""))
+        return max(1, total_chars // 4)
 
 
 def convert_claude_to_openai(
@@ -125,6 +195,10 @@ def convert_claude_to_openai(
             }
         else:
             openai_request["tool_choice"] = "auto"
+
+    # Calculate input tokens for context window checking
+    input_tokens = count_message_tokens(openai_messages, openai_model)
+    openai_request["_input_tokens"] = input_tokens
 
     return openai_request
 

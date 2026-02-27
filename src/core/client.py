@@ -112,6 +112,7 @@ class OpenAIClient:
         except BadRequestError as e:
             from src.core.logging import logger
             logger.error(f"Bad request error: {str(e)}")
+            logger.error(f"Error body: {getattr(e, 'body', 'N/A')}")
             raise HTTPException(status_code=400, detail=self.classify_openai_error(str(e)))
         except APIError as e:
             from src.core.logging import logger
@@ -174,6 +175,7 @@ class OpenAIClient:
         except BadRequestError as e:
             from src.core.logging import logger
             logger.error(f"Streaming bad request error: {str(e)}")
+            logger.error(f"Error body: {getattr(e, 'body', 'N/A')}")
             raise HTTPException(status_code=400, detail=self.classify_openai_error(str(e)))
         except APIError as e:
             from src.core.logging import logger

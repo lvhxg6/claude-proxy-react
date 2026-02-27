@@ -73,6 +73,29 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
         convert_elapsed = time.time() - convert_start
         logger.info(f"[{short_id}] Request conversion: {convert_elapsed:.3f}s")
 
+        # Check context window limit
+        input_tokens = openai_request.get("_input_tokens", 0)
+        context_limit = int(config.model_context_window * config.context_window_threshold)
+
+        if input_tokens > context_limit:
+            logger.warning(
+                f"[{short_id}] Context too large: {input_tokens} tokens "
+                f"(threshold: {context_limit}, window: {config.model_context_window})"
+            )
+            error_response = {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": f"prompt is too long: {input_tokens} tokens > {config.model_context_window} maximum"
+                }
+            }
+            return JSONResponse(status_code=400, content=error_response)
+
+        # Remove internal token count field before sending to upstream
+        openai_request.pop("_input_tokens", None)
+
+        logger.info(f"[{short_id}] Input tokens: {input_tokens}/{config.model_context_window} ({input_tokens/config.model_context_window*100:.1f}%)")
+
         # Check if client disconnected before processing
         if await http_request.is_disconnected():
             logger.info(f"[{short_id}] Client disconnected before upstream call")
