@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from fastapi import HTTPException
 from typing import Optional, AsyncGenerator, Dict, Any
 from openai import AsyncOpenAI, AsyncAzureOpenAI
@@ -61,10 +62,11 @@ class OpenAIClient:
         try:
             # Log request details for debugging
             from src.core.logging import logger
-            logger.info(f"Sending request to OpenAI API: model={request.get('model')}, stream={request.get('stream', False)}")
+            logger.info(f"Upstream request: model={request.get('model')}, stream={request.get('stream', False)}")
             logger.debug(f"Full request: {json.dumps(request, ensure_ascii=False, indent=2)}")
 
             # Create task that can be cancelled
+            upstream_start = time.time()
             completion_task = asyncio.create_task(
                 self.client.chat.completions.create(**request)
             )
@@ -95,6 +97,8 @@ class OpenAIClient:
                 completion = await completion_task
             
             # Convert to dict format that matches the original interface
+            upstream_elapsed = time.time() - upstream_start
+            logger.info(f"Upstream response: {upstream_elapsed:.3f}s, model={request.get('model')}")
             return completion.model_dump()
 
         except AuthenticationError as e:
