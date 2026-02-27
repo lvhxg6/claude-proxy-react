@@ -27,9 +27,14 @@ DEFAULT_COMPACTION_PROMPT = (
 
 
 def should_compact(
-    request: ClaudeMessagesRequest, input_tokens: int
+    request: ClaudeMessagesRequest, effective_input: int
 ) -> Optional[CompactionEdit]:
     """Check if compaction should be triggered.
+
+    Args:
+        request: The Claude request containing context_management config.
+        effective_input: Token count after applying estimation factor,
+            which is more conservative than raw and prevents missed triggers.
 
     Returns the CompactionEdit if triggered, None otherwise.
     """
@@ -42,9 +47,9 @@ def should_compact(
     for edit in request.context_management.edits:
         if edit.type == "compact_20260112":
             trigger_value = edit.trigger.value if edit.trigger else 150000
-            if input_tokens >= trigger_value:
+            if effective_input >= trigger_value:
                 logger.info(
-                    f"Compaction triggered: input_tokens={input_tokens} >= "
+                    f"Compaction triggered: effective_input={effective_input} >= "
                     f"trigger={trigger_value}"
                 )
                 return edit

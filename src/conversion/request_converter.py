@@ -74,6 +74,42 @@ def count_message_tokens(messages: List[Dict[str, Any]], model: str) -> int:
         return max(1, total_chars // 4)
 
 
+def count_tools_tokens(tools: List[Dict[str, Any]], model: str) -> int:
+    """Count tokens consumed by tools/function definitions.
+
+    Tools schema (name, description, parameters JSON schema) are sent as part
+    of the prompt and consume input tokens, but were previously not counted.
+    """
+    try:
+        tokenizer = GLMTokenizer.get_tokenizer()
+        num_tokens = 0
+
+        for tool in tools:
+            # Each tool has structural overhead
+            num_tokens += 4
+            func = tool.get("function", {})
+            name = func.get("name", "")
+            desc = func.get("description", "")
+            params = func.get("parameters", {})
+
+            if name:
+                num_tokens += len(tokenizer.encode(name).ids)
+            if desc:
+                num_tokens += len(tokenizer.encode(desc).ids)
+            if params:
+                params_json = json.dumps(params, ensure_ascii=False)
+                num_tokens += len(tokenizer.encode(params_json).ids)
+
+        logger.debug(f"Tools token count: {num_tokens} ({len(tools)} tools)")
+        return num_tokens
+
+    except Exception as e:
+        logger.error(f"Error counting tools tokens: {e}")
+        # Fallback: estimate from JSON character count
+        tools_json = json.dumps(tools, ensure_ascii=False)
+        return max(1, len(tools_json) // 3)
+
+
 def convert_claude_to_openai(
     claude_request: ClaudeMessagesRequest, model_manager
 ) -> Dict[str, Any]:
@@ -192,7 +228,10 @@ def convert_claude_to_openai(
             openai_request["tool_choice"] = "auto"
 
     # Calculate input tokens for context window checking
+    # Count messages + tools schema (tools can consume significant tokens)
     input_tokens = count_message_tokens(openai_messages, openai_model)
+    if "tools" in openai_request and openai_request["tools"]:
+        input_tokens += count_tools_tokens(openai_request["tools"], openai_model)
     openai_request["_input_tokens"] = input_tokens
 
     return openai_request

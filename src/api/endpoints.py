@@ -101,7 +101,7 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
             )
 
         # === Compaction check (must run BEFORE allowed<=0 rejection) ===
-        compaction_edit = should_compact(request, input_tokens)
+        compaction_edit = should_compact(request, effective_input)
         if compaction_edit:
             logger.info(f"[{short_id}] Compaction triggered, generating summary...")
             # Remove internal token count field before compaction
