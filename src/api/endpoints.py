@@ -58,7 +58,7 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
     req_start = time.time()
     request_id = str(uuid.uuid4())
     short_id = request_id[:8]
-    mapped_model = model_manager.get_model(request.model)
+    mapped_model = model_manager.map_claude_model_to_openai(request.model)
     has_tools = bool(request.tools) and len(request.tools) > 0
 
     logger.info(
