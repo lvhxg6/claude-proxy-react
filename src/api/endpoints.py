@@ -73,15 +73,22 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
         convert_elapsed = time.time() - convert_start
         logger.info(f"[{short_id}] Request conversion: {convert_elapsed:.3f}s")
 
-        # Check context window limit
+        # Check context window and dynamically adjust max_tokens
         input_tokens = openai_request.get("_input_tokens", 0)
+        safety_margin = 256
+        max_tokens = openai_request.get("max_tokens", config.max_tokens_limit)
         context_limit = int(config.model_context_window * config.context_window_threshold)
+        allowed = config.model_context_window - input_tokens - safety_margin
 
+        # Threshold warning (observe only, do not reject)
         if input_tokens > context_limit:
             logger.warning(
-                f"[{short_id}] Context too large: {input_tokens} tokens "
-                f"(threshold: {context_limit}, window: {config.model_context_window})"
+                f"[{short_id}] Context usage high: {input_tokens}/{config.model_context_window} tokens "
+                f"({input_tokens/config.model_context_window*100:.1f}%, threshold={config.context_window_threshold*100:.0f}%)"
             )
+
+        if allowed <= 0:
+            # Input already exceeds window, reject immediately
             error_response = {
                 "type": "error",
                 "error": {
@@ -90,6 +97,14 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
                 }
             }
             return JSONResponse(status_code=400, content=error_response)
+
+        # Dynamically clamp max_tokens to fit within context window
+        if max_tokens > allowed:
+            logger.warning(
+                f"[{short_id}] Clamping max_tokens: {max_tokens} -> {allowed} "
+                f"(input={input_tokens}, window={config.model_context_window}, margin={safety_margin})"
+            )
+            openai_request["max_tokens"] = max(1, allowed)
 
         # Remove internal token count field before sending to upstream
         openai_request.pop("_input_tokens", None)
