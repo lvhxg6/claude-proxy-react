@@ -287,6 +287,9 @@ def convert_claude_assistant_message(msg: ClaudeMessage) -> Dict[str, Any]:
     for block in msg.content:
         if block.type == Constants.CONTENT_TEXT:
             text_parts.append(block.text)
+        elif block.type == "compaction":
+            # Treat compaction summary as assistant text so upstream sees the compressed history
+            text_parts.append(block.content)
         elif block.type == Constants.CONTENT_TOOL_USE:
             tool_calls.append(
                 {
