@@ -189,7 +189,15 @@ ANTHROPIC_BASE_URL=http://localhost:8082 ANTHROPIC_API_KEY="exact-matching-key" 
    MAX_TOKENS_LIMIT="4096"  # Lower if needed
    ```
 
-2. **Check for memory leaks**:
+2. **Tune token estimation and output cap**:
+   The proxy applies a correction factor to compensate for local tokenizer underestimation, and clamps output to the provider's limit:
+   ```bash
+   TOKEN_ESTIMATE_FACTOR="1.30"  # Increase if upstream still rejects (local tokenizer underestimates ~27%)
+   MAX_OUTPUT_TOKENS="16384"     # Set to your provider's max output/completion tokens
+   ```
+   The proxy uses triple clamping: `min(user_max_tokens, allowed_by_window, provider_output_cap)`.
+
+3. **Check for memory leaks**:
    ```bash
    # Monitor memory usage
    watch -n 1 'ps aux | grep claude-code-proxy'

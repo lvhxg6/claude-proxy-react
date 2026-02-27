@@ -4,6 +4,7 @@ from datetime import datetime
 import uuid
 import json
 import time
+import math
 from typing import Optional
 
 from src.core.config import config
@@ -75,41 +76,55 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
 
         # Check context window and dynamically adjust max_tokens
         input_tokens = openai_request.get("_input_tokens", 0)
-        safety_margin = 256
+        effective_input = math.ceil(input_tokens * config.token_estimate_factor)
+        safety_margin = max(1024, int(effective_input * 0.05))
         max_tokens = openai_request.get("max_tokens", config.max_tokens_limit)
         context_limit = int(config.model_context_window * config.context_window_threshold)
-        allowed = config.model_context_window - input_tokens - safety_margin
+        allowed = config.model_context_window - effective_input - safety_margin
 
         # Threshold warning (observe only, do not reject)
-        if input_tokens > context_limit:
+        if effective_input > context_limit:
             logger.warning(
-                f"[{short_id}] Context usage high: {input_tokens}/{config.model_context_window} tokens "
-                f"({input_tokens/config.model_context_window*100:.1f}%, threshold={config.context_window_threshold*100:.0f}%)"
+                f"[{short_id}] Context usage high: {input_tokens}(raw)/{effective_input}(effective)/"
+                f"{config.model_context_window}(window) "
+                f"({effective_input/config.model_context_window*100:.1f}%, "
+                f"threshold={config.context_window_threshold*100:.0f}%)"
             )
 
         if allowed <= 0:
-            # Input already exceeds window, reject immediately
             error_response = {
                 "type": "error",
                 "error": {
                     "type": "invalid_request_error",
-                    "message": f"prompt is too long: {input_tokens} tokens > {config.model_context_window} maximum"
+                    "message": (
+                        f"prompt is too long: ~{effective_input} effective tokens "
+                        f"(raw={input_tokens}, factor={config.token_estimate_factor}) "
+                        f"> {config.model_context_window} context window"
+                    )
                 }
             }
             return JSONResponse(status_code=400, content=error_response)
 
-        # Dynamically clamp max_tokens to fit within context window
-        if max_tokens > allowed:
+        # Triple clamp: min(user_max, allowed, provider_output_cap)
+        final_max_tokens = max(1, min(max_tokens, allowed, config.max_output_tokens))
+        if final_max_tokens != max_tokens:
             logger.warning(
-                f"[{short_id}] Clamping max_tokens: {max_tokens} -> {allowed} "
-                f"(input={input_tokens}, window={config.model_context_window}, margin={safety_margin})"
+                f"[{short_id}] Clamping max_tokens: {max_tokens} -> {final_max_tokens} "
+                f"(input={input_tokens}, effective={effective_input}, allowed={allowed}, "
+                f"output_cap={config.max_output_tokens}, window={config.model_context_window})"
             )
-            openai_request["max_tokens"] = max(1, allowed)
+            openai_request["max_tokens"] = final_max_tokens
 
         # Remove internal token count field before sending to upstream
         openai_request.pop("_input_tokens", None)
 
-        logger.info(f"[{short_id}] Input tokens: {input_tokens}/{config.model_context_window} ({input_tokens/config.model_context_window*100:.1f}%)")
+        # Log final payload values for debugging
+        logger.info(
+            f"[{short_id}] Input tokens: {input_tokens}(raw)/{effective_input}(effective)/"
+            f"{config.model_context_window}(window) "
+            f"({effective_input/config.model_context_window*100:.1f}%), "
+            f"max_tokens={openai_request.get('max_tokens')}"
+        )
 
         # Check if client disconnected before processing
         if await http_request.is_disconnected():

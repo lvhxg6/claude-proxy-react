@@ -33,6 +33,10 @@ class Config:
         # Context window settings
         self.model_context_window = int(os.environ.get("MODEL_CONTEXT_WINDOW", "131072"))
         self.context_window_threshold = float(os.environ.get("CONTEXT_WINDOW_THRESHOLD", "0.85"))
+        # Token estimation correction factor (local tokenizer underestimates)
+        self.token_estimate_factor = float(os.environ.get("TOKEN_ESTIMATE_FACTOR", "1.30"))
+        # Provider's max output tokens limit
+        self.max_output_tokens = int(os.environ.get("MAX_OUTPUT_TOKENS", "16384"))
         
     def validate_api_key(self):
         """Basic API key validation"""
