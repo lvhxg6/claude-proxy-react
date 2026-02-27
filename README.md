@@ -35,7 +35,22 @@ cp .env.example .env
 # Note: Environment variables are automatically loaded from .env file
 ```
 
-### 3. Start Server
+### 3. Prepare Tokenizer
+
+项目使用 GLM-4.7 官方 `tokenizer.json` 进行精确的 token 计数。该文件是 GLM-4.7 的词表文件（~20MB），包含词表、BPE 合并规则和特殊 token 定义，首次运行前需要准备好：
+
+```bash
+# 方式一：从 ModelScope 下载（国内推荐）
+curl -L "https://modelscope.cn/models/ZhipuAI/GLM-4-9B-0414/resolve/master/tokenizer.json" -o tokenizer.json
+
+# 方式二：从 HuggingFace 下载（需要科学上网）
+# 程序首次启动时会自动从 HuggingFace 下载并缓存到 .cache/huggingface/
+# 也可以设置镜像：export HF_ENDPOINT=https://hf-mirror.com
+```
+
+将 `tokenizer.json` 放在项目根目录即可，程序会优先加载本地文件。
+
+### 4. Start Server
 
 ```bash
 # Direct run
@@ -48,7 +63,7 @@ uv run claude-code-proxy
 docker compose up -d
 ```
 
-### 4. Use with Claude Code
+### 5. Use with Claude Code
 
 ```bash
 # If ANTHROPIC_API_KEY is not set in the proxy:
