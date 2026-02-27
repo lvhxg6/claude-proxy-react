@@ -100,6 +100,24 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
                 f"threshold={config.context_window_threshold*100:.0f}%)"
             )
 
+        # === Compaction check (must run BEFORE allowed<=0 rejection) ===
+        compaction_edit = should_compact(request, input_tokens)
+        if compaction_edit:
+            logger.info(f"[{short_id}] Compaction triggered, generating summary...")
+            # Remove internal token count field before compaction
+            openai_request.pop("_input_tokens", None)
+            try:
+                return await _handle_compaction(
+                    request, openai_request, compaction_edit,
+                    mapped_model, input_tokens, request_id, short_id,
+                    req_start, http_request,
+                )
+            except Exception as e:
+                logger.warning(f"[{short_id}] Compaction failed, falling back to normal flow: {e}")
+                import traceback
+                logger.warning(traceback.format_exc())
+                # Fall through to normal request flow
+
         if allowed <= 0:
             error_response = {
                 "type": "error",
@@ -134,22 +152,6 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
             f"({effective_input/config.model_context_window*100:.1f}%), "
             f"max_tokens={openai_request.get('max_tokens')}"
         )
-
-        # === Compaction check ===
-        compaction_edit = should_compact(request, input_tokens)
-        if compaction_edit:
-            logger.info(f"[{short_id}] Compaction triggered, generating summary...")
-            try:
-                return await _handle_compaction(
-                    request, openai_request, compaction_edit,
-                    mapped_model, input_tokens, request_id, short_id,
-                    req_start, http_request,
-                )
-            except Exception as e:
-                logger.warning(f"[{short_id}] Compaction failed, falling back to normal flow: {e}")
-                import traceback
-                logger.warning(traceback.format_exc())
-                # Fall through to normal request flow
 
         # Check if client disconnected before processing
         if await http_request.is_disconnected():
