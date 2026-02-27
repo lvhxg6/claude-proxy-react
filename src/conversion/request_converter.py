@@ -1,72 +1,67 @@
 import json
 from typing import Dict, Any, List
-from venv import logger
 from src.core.constants import Constants
 from src.models.claude import ClaudeMessagesRequest, ClaudeMessage
 from src.core.config import config
+from src.core.tokenizer import GLMTokenizer
 import logging
-import tiktoken
 
 logger = logging.getLogger(__name__)
 
 
 def count_message_tokens(messages: List[Dict[str, Any]], model: str) -> int:
     """
-    Count tokens in OpenAI format messages using tiktoken.
+    Count tokens in OpenAI format messages using GLM-4.7 tokenizer.
 
     Args:
         messages: List of OpenAI format messages
-        model: Model name for encoding selection
+        model: Model name (unused, kept for compatibility)
 
     Returns:
-        Estimated token count
+        Exact token count for GLM-4.7
     """
     try:
-        # Try to get encoding for the specific model
-        try:
-            encoding = tiktoken.encoding_for_model(model)
-        except KeyError:
-            # Fallback to cl100k_base encoding (used by gpt-4, gpt-3.5-turbo, etc.)
-            encoding = tiktoken.get_encoding("cl100k_base")
-
+        tokenizer = GLMTokenizer.get_tokenizer()
         num_tokens = 0
 
         for message in messages:
-            # Every message follows <|start|>{role/name}\n{content}<|end|>\n
+            # Message structure overhead (role markers, formatting)
             num_tokens += 4  # Base tokens per message
 
             for key, value in message.items():
                 if key == "role":
-                    num_tokens += len(encoding.encode(value))
+                    num_tokens += len(tokenizer.encode(value).ids)
                 elif key == "content":
                     if isinstance(value, str):
-                        num_tokens += len(encoding.encode(value))
+                        num_tokens += len(tokenizer.encode(value).ids)
                     elif isinstance(value, list):
                         # Handle multimodal content
                         for item in value:
                             if isinstance(item, dict):
                                 if item.get("type") == "text":
-                                    num_tokens += len(encoding.encode(item.get("text", "")))
+                                    text = item.get("text", "")
+                                    num_tokens += len(tokenizer.encode(text).ids)
                                 elif item.get("type") == "image_url":
-                                    # Rough estimate for images (varies by size)
+                                    # Image token estimation (GLM-4V uses ~85 tokens per image)
                                     num_tokens += 85
                 elif key == "name":
-                    num_tokens += len(encoding.encode(value))
+                    num_tokens += len(tokenizer.encode(value).ids)
                 elif key == "tool_calls":
                     # Count tokens in tool calls
                     for tool_call in value:
                         if isinstance(tool_call, dict):
-                            num_tokens += len(encoding.encode(json.dumps(tool_call, ensure_ascii=False)))
+                            tool_json = json.dumps(tool_call, ensure_ascii=False)
+                            num_tokens += len(tokenizer.encode(tool_json).ids)
                 elif key == "tool_call_id":
-                    num_tokens += len(encoding.encode(value))
+                    num_tokens += len(tokenizer.encode(value).ids)
 
-        num_tokens += 2  # Every reply is primed with <|start|>assistant
+        num_tokens += 2  # Reply priming tokens
 
         return num_tokens
 
     except Exception as e:
-        logger.warning(f"Error counting tokens with tiktoken: {e}, falling back to character estimation")
-        # Fallback: rough character-based estimation
+        logger.error(f"Error counting tokens with GLM tokenizer: {e}")
+        # Fallback: character-based estimation
         total_chars = 0
         for message in messages:
             content = message.get("content", "")

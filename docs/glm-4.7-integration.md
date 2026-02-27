@@ -141,7 +141,7 @@ SMALL_MODEL="GLM-4.7-FP8"
 # Enable debug logging to monitor ReAct parsing
 LOG_LEVEL="DEBUG"
 
-# GLM-4.7 supports 200K context, 128K output
+# GLM-4.7 supports 128K context
 MAX_TOKENS_LIMIT="65536"
 REQUEST_TIMEOUT="120"
 ```

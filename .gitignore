@@ -174,4 +174,9 @@ poetry.toml
 pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python
-n
+
+# HuggingFace cache
+.cache/
+
+# GLM tokenizer (downloaded separately, ~20MB)
+tokenizer.json

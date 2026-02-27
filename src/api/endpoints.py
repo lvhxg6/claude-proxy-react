@@ -218,7 +218,6 @@ async def _timed_streaming_wrapper(stream_gen, short_id: str, req_start: float):
 async def count_tokens(request: ClaudeTokenCountRequest, _: None = Depends(validate_api_key)):
     try:
         # For token counting, we'll use a simple estimation
-        # In a real implementation, you might want to use tiktoken or similar
 
         total_chars = 0
 
