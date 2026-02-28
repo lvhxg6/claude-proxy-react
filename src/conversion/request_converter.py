@@ -288,6 +288,10 @@ def convert_claude_to_openai(
         input_tokens += count_tools_tokens(openai_request["tools"], openai_model)
     openai_request["_input_tokens"] = input_tokens
 
+    # Store pruned messages for compaction summarization (if boundary was found)
+    # This ensures compaction summaries are based on post-pruning context, not original history
+    openai_request["_pruned_messages"] = messages
+
     return openai_request
 
 

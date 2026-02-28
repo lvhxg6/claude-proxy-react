@@ -296,8 +296,12 @@ async def _handle_compaction(
     # Determine which model to use for summarization
     compaction_model = config.compaction_model or mapped_model
 
-    # Build summarization request
-    compaction_messages = build_compaction_messages(request, compaction_edit)
+    # Extract pruned messages from openai_request (post-boundary pruning)
+    # This ensures we summarize only the relevant context, not already-compressed history
+    pruned_messages = openai_request.get("_pruned_messages", None)
+
+    # Build summarization request using pruned messages
+    compaction_messages = build_compaction_messages(request, compaction_edit, pruned_messages)
     summary_request = {
         "model": compaction_model,
         "messages": compaction_messages,
@@ -446,8 +450,11 @@ async def count_tokens(request: ClaudeTokenCountRequest, _: None = Depends(valid
         )
         openai_request = convert_claude_to_openai(pseudo_request, model_manager)
         input_tokens = openai_request.get("_input_tokens", 0)
+        # Apply TOKEN_ESTIMATE_FACTOR to match main pipeline's effective_input calculation
+        # This ensures CLI's compaction trigger logic aligns with proxy's auto-compaction
+        effective_input = math.ceil(input_tokens * config.token_estimate_factor)
 
-        return {"input_tokens": input_tokens}
+        return {"input_tokens": effective_input}
 
     except Exception as e:
         logger.error(f"Error counting tokens: {e}")

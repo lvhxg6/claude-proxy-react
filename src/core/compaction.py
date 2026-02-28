@@ -67,8 +67,15 @@ def should_compact(
     return None
 
 
-def _serialize_messages(request: ClaudeMessagesRequest) -> str:
-    """Serialize conversation messages to text for summarization."""
+def _serialize_messages(
+    request: ClaudeMessagesRequest, messages: Optional[List] = None
+) -> str:
+    """Serialize conversation messages to text for summarization.
+
+    Args:
+        request: Original request (for system prompt)
+        messages: Optional pruned message list; if None, uses request.messages
+    """
     parts = []
 
     # Include system prompt context
@@ -80,7 +87,9 @@ def _serialize_messages(request: ClaudeMessagesRequest) -> str:
                 if hasattr(block, "text"):
                     parts.append(f"[System]: {block.text}")
 
-    for msg in request.messages:
+    # Use provided messages or fall back to request.messages
+    msg_list = messages if messages is not None else request.messages
+    for msg in msg_list:
         role = msg.role.upper()
         if isinstance(msg.content, str):
             parts.append(f"[{role}]: {msg.content}")
@@ -89,6 +98,10 @@ def _serialize_messages(request: ClaudeMessagesRequest) -> str:
                 if hasattr(block, "type"):
                     if block.type == "text":
                         parts.append(f"[{role}]: {block.text}")
+                    elif block.type == "compaction":
+                        # Include compaction summary in serialization
+                        if block.content:
+                            parts.append(f"[{role} compaction]: {block.content}")
                     elif block.type == "tool_use":
                         parts.append(
                             f"[{role} tool_use]: {block.name}({json.dumps(block.input, ensure_ascii=False)[:500]})"
@@ -101,10 +114,18 @@ def _serialize_messages(request: ClaudeMessagesRequest) -> str:
 
 
 def build_compaction_messages(
-    request: ClaudeMessagesRequest, compaction_edit: CompactionEdit
+    request: ClaudeMessagesRequest,
+    compaction_edit: CompactionEdit,
+    pruned_messages: Optional[List] = None,
 ) -> List[Dict[str, Any]]:
-    """Build OpenAI-format messages for the summarization request."""
-    conversation_text = _serialize_messages(request)
+    """Build OpenAI-format messages for the summarization request.
+
+    Args:
+        request: Original request (for system prompt)
+        compaction_edit: Compaction configuration
+        pruned_messages: Optional pruned message list (post-boundary); if None, uses request.messages
+    """
+    conversation_text = _serialize_messages(request, pruned_messages)
 
     # Truncate if too long (leave room for the prompt itself)
     max_chars = config.model_context_window * 3  # rough char-to-token ratio
