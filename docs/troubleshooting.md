@@ -301,13 +301,26 @@ COMPACTION_MODEL=""             # Use a specific model for summarization (empty 
 COMPACTION_MAX_TOKENS="4096"    # Max tokens for the summary
 ```
 
+**Compaction boundary pruning (v1.1.0+):**
+
+Per Anthropic protocol, when the CLI sends back a `compaction` block in the message history, the proxy now finds the most recent compaction block and discards all messages before it. This ensures token count actually decreases after compaction, preventing the "compress → no effect → re-compress" loop.
+
+- `compaction.content = null` is treated as a no-op boundary marker (failed compaction); the boundary still applies.
+- Auto-triggered compaction (no `context_management` from CLI) now uses `pause_after_compaction=false`, so the proxy completes the compression + follow-up request itself without relying on CLI to rebuild context.
+
 **Debugging:**
 ```bash
 # Check if compaction is triggering
 grep "Compaction triggered" logs/proxy_*.log
 
+# Check boundary pruning
+grep "Compaction boundary prune" logs/proxy_*.log
+
 # Check summary generation
 grep "Compaction summary generated" logs/proxy_*.log
+
+# Check compaction observability fields
+grep "has_compaction_block=True" logs/proxy_*.log
 
 # If compaction fails, it falls back to normal flow with a warning
 grep "Compaction failed" logs/proxy_*.log
@@ -328,4 +341,4 @@ grep "Compaction failed" logs/proxy_*.log
 
 1. **Image support**: Limited to base64 encoded images
 2. **Model mapping**: Fixed mapping (haiku→SMALL, sonnet→MIDDLE, opus→BIG)
-3. **Token counting**: Uses character-based estimation (4 chars = 1 token)
+3. **Token counting**: Uses GLM-4.7 official tokenizer with tools schema counting (unified with main request pipeline)

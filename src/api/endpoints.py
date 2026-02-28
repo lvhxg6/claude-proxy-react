@@ -13,6 +13,7 @@ from src.core.client import OpenAIClient
 from src.core.constants import Constants
 from src.models.claude import ClaudeMessagesRequest, ClaudeTokenCountRequest
 from src.conversion.request_converter import convert_claude_to_openai
+from src.conversion.request_converter import count_message_tokens, count_tools_tokens
 from src.conversion.response_converter import (
     convert_openai_to_claude_response,
     convert_openai_streaming_to_claude_with_cancellation,
@@ -72,9 +73,23 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
     mapped_model = model_manager.map_claude_model_to_openai(request.model)
     has_tools = bool(request.tools) and len(request.tools) > 0
 
+    # Observability: compaction-related fields
+    has_context_management = request.context_management is not None
+    edit_count = len(request.context_management.edits) if request.context_management else 0
+    has_compaction_block = any(
+        isinstance(msg.content, list) and any(
+            hasattr(b, "type") and b.type == "compaction" for b in msg.content
+        )
+        for msg in request.messages
+        if not isinstance(msg.content, str) and msg.content is not None
+    )
+
     logger.info(
         f"[{short_id}] >>> Request started: model={request.model}->{mapped_model}, "
-        f"stream={request.stream}, has_tools={has_tools}, max_tokens={request.max_tokens}"
+        f"stream={request.stream}, has_tools={has_tools}, max_tokens={request.max_tokens}, "
+        f"messages={len(request.messages)}, "
+        f"has_context_management={has_context_management}, edit_count={edit_count}, "
+        f"has_compaction_block={has_compaction_block}"
     )
 
     try:
@@ -418,34 +433,21 @@ async def _handle_compaction(
 @router.post("/v1/messages/count_tokens")
 async def count_tokens(request: ClaudeTokenCountRequest, _: None = Depends(validate_api_key)):
     try:
-        # For token counting, we'll use a simple estimation
+        # Build a minimal ClaudeMessagesRequest to reuse the main conversion pipeline
+        from src.models.claude import ClaudeMessagesRequest as _Req
+        pseudo_request = _Req(
+            model=request.model,
+            max_tokens=1,  # dummy, not used for counting
+            messages=request.messages,
+            system=request.system,
+            tools=request.tools,
+            thinking=request.thinking,
+            tool_choice=request.tool_choice,
+        )
+        openai_request = convert_claude_to_openai(pseudo_request, model_manager)
+        input_tokens = openai_request.get("_input_tokens", 0)
 
-        total_chars = 0
-
-        # Count system message characters
-        if request.system:
-            if isinstance(request.system, str):
-                total_chars += len(request.system)
-            elif isinstance(request.system, list):
-                for block in request.system:
-                    if hasattr(block, "text"):
-                        total_chars += len(block.text)
-
-        # Count message characters
-        for msg in request.messages:
-            if msg.content is None:
-                continue
-            elif isinstance(msg.content, str):
-                total_chars += len(msg.content)
-            elif isinstance(msg.content, list):
-                for block in msg.content:
-                    if hasattr(block, "text") and block.text is not None:
-                        total_chars += len(block.text)
-
-        # Rough estimation: 4 characters per token
-        estimated_tokens = max(1, total_chars // 4)
-
-        return {"input_tokens": estimated_tokens}
+        return {"input_tokens": input_tokens}
 
     except Exception as e:
         logger.error(f"Error counting tokens: {e}")

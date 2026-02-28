@@ -22,8 +22,9 @@ class ClaudeContentBlockToolResult(BaseModel):
 
 class ClaudeContentBlockCompaction(BaseModel):
     # Auto-compaction block returned by the proxy; may be sent back by CLI.
+    # content may be null when compaction failed (no-op boundary marker).
     type: Literal["compaction"]
-    content: str
+    content: Optional[str] = None
 
 class ClaudeSystemContent(BaseModel):
     type: Literal["text"]

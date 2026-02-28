@@ -55,13 +55,14 @@ def should_compact(
                     return edit
 
     # 2) 无 context_management 或未触发时的自动压缩
-    #    强制 pause_after_compaction=True，让 CLI 识别 stop_reason="compaction" 并重建上下文
+    #    使用 pause_after_compaction=False，让 proxy 自己完成压缩+继续请求，
+    #    不依赖 CLI 重建上下文（CLI 可能不知道如何处理 auto compaction 的 pause 响应）
     if effective_input >= auto_trigger:
         logger.info(
             "Compaction triggered (auto): "
             f"effective_input={effective_input} >= auto_trigger={auto_trigger}"
         )
-        return CompactionEdit(pause_after_compaction=True)
+        return CompactionEdit(pause_after_compaction=False)
 
     return None
 

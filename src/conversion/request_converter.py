@@ -1,7 +1,7 @@
 import json
 from typing import Dict, Any, List
 from src.core.constants import Constants
-from src.models.claude import ClaudeMessagesRequest, ClaudeMessage
+from src.models.claude import ClaudeMessagesRequest, ClaudeMessage, ClaudeContentBlockCompaction
 from src.core.config import config
 from src.core.tokenizer import GLMTokenizer
 import logging
@@ -110,6 +110,52 @@ def count_tools_tokens(tools: List[Dict[str, Any]], model: str) -> int:
         return max(1, len(tools_json) // 3)
 
 
+def _find_compaction_boundary(messages: List[ClaudeMessage]) -> tuple:
+    """Find the latest compaction block and return (boundary_index, summary).
+
+    Scans messages in reverse to find the most recent assistant message
+    containing a compaction block. Per Anthropic protocol, all messages
+    before this boundary should be discarded.
+
+    Returns:
+        (boundary_index, summary_text) if found, (-1, None) otherwise.
+    """
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        if msg.role != Constants.ROLE_ASSISTANT:
+            continue
+        if isinstance(msg.content, str):
+            continue
+        if not isinstance(msg.content, list):
+            continue
+        for block in msg.content:
+            if isinstance(block, ClaudeContentBlockCompaction) or (
+                hasattr(block, "type") and block.type == "compaction"
+            ):
+                summary = getattr(block, "content", None)
+                return i, summary
+    return -1, None
+
+
+def _prune_messages_at_boundary(
+    messages: List[ClaudeMessage], boundary_index: int, summary: str | None
+) -> List[ClaudeMessage]:
+    """Prune messages at compaction boundary.
+
+    Keeps only messages from boundary_index onward. The compaction block
+    itself is preserved in the assistant message (will be converted to text).
+    """
+    pruned = messages[boundary_index:]
+    original_count = len(messages)
+    pruned_count = original_count - len(pruned)
+    logger.info(
+        f"Compaction boundary prune: dropped {pruned_count}/{original_count} messages, "
+        f"kept {len(pruned)} from index {boundary_index}, "
+        f"summary={'present' if summary else 'null (no-op)'}"
+    )
+    return pruned
+
+
 def convert_claude_to_openai(
     claude_request: ClaudeMessagesRequest, model_manager
 ) -> Dict[str, Any]:
@@ -117,6 +163,14 @@ def convert_claude_to_openai(
 
     # Map model
     openai_model = model_manager.map_claude_model_to_openai(claude_request.model)
+
+    # === Compaction boundary pruning ===
+    # Per Anthropic protocol: find the latest compaction block and discard
+    # all messages before it. The compaction summary replaces prior history.
+    messages = list(claude_request.messages)
+    boundary_index, summary = _find_compaction_boundary(messages)
+    if boundary_index >= 0:
+        messages = _prune_messages_at_boundary(messages, boundary_index, summary)
 
     # Convert messages
     openai_messages = []
@@ -143,10 +197,10 @@ def convert_claude_to_openai(
                 {"role": Constants.ROLE_SYSTEM, "content": system_text.strip()}
             )
 
-    # Process Claude messages
+    # Process Claude messages (using pruned messages if compaction boundary was found)
     i = 0
-    while i < len(claude_request.messages):
-        msg = claude_request.messages[i]
+    while i < len(messages):
+        msg = messages[i]
 
         if msg.role == Constants.ROLE_USER:
             openai_message = convert_claude_user_message(msg)
@@ -156,8 +210,8 @@ def convert_claude_to_openai(
             openai_messages.append(openai_message)
 
             # Check if next message contains tool results
-            if i + 1 < len(claude_request.messages):
-                next_msg = claude_request.messages[i + 1]
+            if i + 1 < len(messages):
+                next_msg = messages[i + 1]
                 if (
                     next_msg.role == Constants.ROLE_USER
                     and isinstance(next_msg.content, list)
@@ -288,8 +342,9 @@ def convert_claude_assistant_message(msg: ClaudeMessage) -> Dict[str, Any]:
         if block.type == Constants.CONTENT_TEXT:
             text_parts.append(block.text)
         elif block.type == "compaction":
-            # Treat compaction summary as assistant text so upstream sees the compressed history
-            text_parts.append(block.content)
+            # Compaction summary as assistant text; null content = no-op boundary
+            if block.content:
+                text_parts.append(block.content)
         elif block.type == Constants.CONTENT_TOOL_USE:
             tool_calls.append(
                 {
