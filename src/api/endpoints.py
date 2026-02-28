@@ -158,8 +158,9 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
             )
             openai_request["max_tokens"] = final_max_tokens
 
-        # Remove internal token count field before sending to upstream
+        # Remove internal fields before sending to upstream
         openai_request.pop("_input_tokens", None)
+        openai_request.pop("_pruned_messages", None)
 
         # Log final payload values for debugging
         logger.info(
