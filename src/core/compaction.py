@@ -7,9 +7,9 @@ the compacted follow-up request.
 """
 
 import json
-import uuid
 import logging
-from typing import Optional, Dict, Any, List, Tuple
+import uuid
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.config import config
 from src.core.constants import Constants
@@ -67,9 +67,7 @@ def should_compact(
     return None
 
 
-def _serialize_messages(
-    request: ClaudeMessagesRequest, messages: Optional[List] = None
-) -> str:
+def _serialize_messages(request: ClaudeMessagesRequest, messages: Optional[List] = None) -> str:
     """Serialize conversation messages to text for summarization.
 
     Args:
@@ -107,7 +105,11 @@ def _serialize_messages(
                             f"[{role} tool_use]: {block.name}({json.dumps(block.input, ensure_ascii=False)[:500]})"
                         )
                     elif block.type == "tool_result":
-                        content = block.content if isinstance(block.content, str) else json.dumps(block.content, ensure_ascii=False)[:500]
+                        content = (
+                            block.content
+                            if isinstance(block.content, str)
+                            else json.dumps(block.content, ensure_ascii=False)[:500]
+                        )
                         parts.append(f"[{role} tool_result]: {content}")
 
     return "\n".join(parts)
@@ -131,9 +133,7 @@ def build_compaction_messages(
     max_chars = config.model_context_window * 3  # rough char-to-token ratio
     if len(conversation_text) > max_chars:
         conversation_text = conversation_text[-max_chars:]
-        logger.warning(
-            f"Compaction: truncated conversation to last {max_chars} chars"
-        )
+        logger.warning(f"Compaction: truncated conversation to last {max_chars} chars")
 
     if compaction_edit.instructions:
         prompt = compaction_edit.instructions + "\n\nCONVERSATION:\n" + conversation_text
@@ -141,7 +141,10 @@ def build_compaction_messages(
         prompt = DEFAULT_COMPACTION_PROMPT + conversation_text
 
     return [
-        {"role": "system", "content": "You are a helpful assistant that summarizes conversations accurately and concisely."},
+        {
+            "role": "system",
+            "content": "You are a helpful assistant that summarizes conversations accurately and concisely.",
+        },
         {"role": "user", "content": prompt},
     ]
 
@@ -158,8 +161,7 @@ def build_followup_request(
     """
     # Extract system messages from original openai_request
     system_messages = [
-        m for m in openai_request.get("messages", [])
-        if m.get("role") == Constants.ROLE_SYSTEM
+        m for m in openai_request.get("messages", []) if m.get("role") == Constants.ROLE_SYSTEM
     ]
 
     # Get the last user message from original request
@@ -220,9 +222,7 @@ def build_compaction_response(
         "type": "message",
         "role": Constants.ROLE_ASSISTANT,
         "model": request.model,
-        "content": [
-            {"type": Constants.CONTENT_COMPACTION, "content": summary}
-        ],
+        "content": [{"type": Constants.CONTENT_COMPACTION, "content": summary}],
         "stop_reason": Constants.STOP_COMPACTION,
         "stop_sequence": None,
         "usage": {
@@ -255,9 +255,7 @@ def build_compaction_with_response(
     """
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
 
-    all_content = [
-        {"type": Constants.CONTENT_COMPACTION, "content": summary}
-    ] + content_blocks
+    all_content = [{"type": Constants.CONTENT_COMPACTION, "content": summary}] + content_blocks
 
     return {
         "id": message_id,
@@ -269,7 +267,7 @@ def build_compaction_with_response(
         "stop_sequence": None,
         "usage": {
             "input_tokens": message_input_tokens,
-            "output_tokens": compaction_output_tokens + message_output_tokens,
+            "output_tokens": message_output_tokens,  # Only message iteration tokens
             "iterations": [
                 {
                     "type": "compaction",

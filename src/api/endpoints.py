@@ -1,34 +1,38 @@
-from fastapi import APIRouter, HTTPException, Request, Header, Depends
-from fastapi.responses import JSONResponse, StreamingResponse
-from datetime import datetime
-import uuid
 import json
-import time
 import math
+import time
+import uuid
+from datetime import datetime
 from typing import Optional
 
-from src.core.config import config
-from src.core.logging import logger
-from src.core.client import OpenAIClient
-from src.core.constants import Constants
-from src.models.claude import ClaudeMessagesRequest, ClaudeTokenCountRequest
-from src.conversion.request_converter import convert_claude_to_openai
-from src.conversion.request_converter import count_message_tokens, count_tools_tokens
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+
+from src.conversion.request_converter import (
+    convert_claude_to_openai,
+    count_message_tokens,
+    count_tools_tokens,
+)
 from src.conversion.response_converter import (
-    convert_openai_to_claude_response,
-    convert_openai_streaming_to_claude_with_cancellation,
-    convert_non_streaming_to_sse,
     convert_compaction_to_sse,
+    convert_non_streaming_to_sse,
+    convert_openai_streaming_to_claude_with_cancellation,
+    convert_openai_to_claude_response,
     stream_compaction_with_response,
 )
-from src.core.model_manager import model_manager
+from src.core.client import OpenAIClient
 from src.core.compaction import (
-    should_compact,
     build_compaction_messages,
-    build_followup_request,
     build_compaction_response,
     build_compaction_with_response,
+    build_followup_request,
+    should_compact,
 )
+from src.core.config import config
+from src.core.constants import Constants
+from src.core.logging import logger
+from src.core.model_manager import model_manager
+from src.models.claude import ClaudeMessagesRequest, ClaudeTokenCountRequest
 
 router = APIRouter()
 
@@ -43,30 +47,35 @@ openai_client = OpenAIClient(
     custom_headers=custom_headers,
 )
 
-async def validate_api_key(x_api_key: Optional[str] = Header(None), authorization: Optional[str] = Header(None)):
+
+async def validate_api_key(
+    x_api_key: Optional[str] = Header(None), authorization: Optional[str] = Header(None)
+):
     """Validate the client's API key from either x-api-key header or Authorization header."""
     client_api_key = None
-    
+
     # Extract API key from headers
     if x_api_key:
         client_api_key = x_api_key
     elif authorization and authorization.startswith("Bearer "):
         client_api_key = authorization.replace("Bearer ", "")
-    
+
     # Skip validation if ANTHROPIC_API_KEY is not set in the environment
     if not config.anthropic_api_key:
         return
-        
+
     # Validate the client API key
     if not client_api_key or not config.validate_client_api_key(client_api_key):
         logger.warning(f"Invalid API key provided by client")
         raise HTTPException(
-            status_code=401,
-            detail="Invalid API key. Please provide a valid Anthropic API key."
+            status_code=401, detail="Invalid API key. Please provide a valid Anthropic API key."
         )
 
+
 @router.post("/v1/messages")
-async def create_message(request: ClaudeMessagesRequest, http_request: Request, _: None = Depends(validate_api_key)):
+async def create_message(
+    request: ClaudeMessagesRequest, http_request: Request, _: None = Depends(validate_api_key)
+):
     req_start = time.time()
     request_id = str(uuid.uuid4())
     short_id = request_id[:8]
@@ -77,9 +86,8 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
     has_context_management = request.context_management is not None
     edit_count = len(request.context_management.edits) if request.context_management else 0
     has_compaction_block = any(
-        isinstance(msg.content, list) and any(
-            hasattr(b, "type") and b.type == "compaction" for b in msg.content
-        )
+        isinstance(msg.content, list)
+        and any(hasattr(b, "type") and b.type == "compaction" for b in msg.content)
         for msg in request.messages
         if not isinstance(msg.content, str) and msg.content is not None
     )
@@ -124,13 +132,20 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
             openai_request.pop("_input_tokens", None)
             try:
                 return await _handle_compaction(
-                    request, openai_request, compaction_edit,
-                    mapped_model, input_tokens, request_id, short_id,
-                    req_start, http_request,
+                    request,
+                    openai_request,
+                    compaction_edit,
+                    mapped_model,
+                    input_tokens,
+                    request_id,
+                    short_id,
+                    req_start,
+                    http_request,
                 )
             except Exception as e:
                 logger.warning(f"[{short_id}] Compaction failed, falling back to normal flow: {e}")
                 import traceback
+
                 logger.warning(traceback.format_exc())
                 # Fall through to normal request flow
 
@@ -143,8 +158,8 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
                         f"prompt is too long: ~{effective_input} effective tokens "
                         f"(raw={input_tokens}, factor={config.token_estimate_factor}) "
                         f"> {config.model_context_window} context window"
-                    )
-                }
+                    ),
+                },
             }
             return JSONResponse(status_code=400, content=error_response)
 
@@ -181,7 +196,9 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
         use_streaming = request.stream and not has_tools
 
         if has_tools and request.stream:
-            logger.info(f"[{short_id}] Tools present: forcing non-streaming backend, will convert to SSE")
+            logger.info(
+                f"[{short_id}] Tools present: forcing non-streaming backend, will convert to SSE"
+            )
             openai_request["stream"] = False
 
         if use_streaming:
@@ -214,6 +231,7 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
             except HTTPException as e:
                 logger.error(f"[{short_id}] Streaming error: {e.detail}")
                 import traceback
+
                 logger.error(traceback.format_exc())
                 error_message = openai_client.classify_openai_error(e.detail)
                 error_response = {
@@ -223,19 +241,17 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
                 return JSONResponse(status_code=e.status_code, content=error_response)
         else:
             # Non-streaming backend call
-            logger.debug(f"[{short_id}] OpenAI Request: {json.dumps(openai_request, indent=2, ensure_ascii=False)}")
+            logger.debug(
+                f"[{short_id}] OpenAI Request: {json.dumps(openai_request, indent=2, ensure_ascii=False)}"
+            )
 
             upstream_start = time.time()
-            openai_response = await openai_client.create_chat_completion(
-                openai_request, request_id
-            )
+            openai_response = await openai_client.create_chat_completion(openai_request, request_id)
             upstream_elapsed = time.time() - upstream_start
             logger.info(f"[{short_id}] Upstream API call: {upstream_elapsed:.3f}s")
 
             resp_convert_start = time.time()
-            claude_response = convert_openai_to_claude_response(
-                openai_response, request
-            )
+            claude_response = convert_openai_to_claude_response(openai_response, request)
             resp_convert_elapsed = time.time() - resp_convert_start
             logger.info(f"[{short_id}] Response conversion: {resp_convert_elapsed:.3f}s")
 
@@ -264,6 +280,7 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
         raise
     except Exception as e:
         import traceback
+
         total_elapsed = time.time() - req_start
         logger.error(f"[{short_id}] !!! Request failed after {total_elapsed:.3f}s: {e}")
         logger.error(traceback.format_exc())
@@ -285,13 +302,21 @@ async def _timed_streaming_wrapper(stream_gen, short_id: str, req_start: float):
             yield chunk
     finally:
         total_elapsed = time.time() - req_start
-        logger.info(f"[{short_id}] <<< Stream finished: total={total_elapsed:.3f}s, chunks={chunk_count}")
+        logger.info(
+            f"[{short_id}] <<< Stream finished: total={total_elapsed:.3f}s, chunks={chunk_count}"
+        )
 
 
 async def _handle_compaction(
-    request, openai_request, compaction_edit,
-    mapped_model, input_tokens, request_id, short_id,
-    req_start, http_request,
+    request,
+    openai_request,
+    compaction_edit,
+    mapped_model,
+    input_tokens,
+    request_id,
+    short_id,
+    req_start,
+    http_request,
 ):
     """Handle the compaction flow: summarize conversation, optionally continue with follow-up."""
     # Determine which model to use for summarization
@@ -314,7 +339,9 @@ async def _handle_compaction(
     # First LLM call: generate summary
     summary_start = time.time()
     logger.info(f"[{short_id}] Compaction: sending summary request to {compaction_model}")
-    summary_response = await openai_client.create_chat_completion(summary_request, request_id + "_compact")
+    summary_response = await openai_client.create_chat_completion(
+        summary_request, request_id + "_compact"
+    )
     summary_elapsed = time.time() - summary_start
 
     # Extract summary text
@@ -326,10 +353,15 @@ async def _handle_compaction(
     compaction_input_tokens = summary_response.get("usage", {}).get("prompt_tokens", 0)
     compaction_output_tokens = summary_response.get("usage", {}).get("completion_tokens", 0)
 
+    # Calculate summary hash for observability
+    import hashlib
+
+    summary_hash = hashlib.md5(summary.encode()).hexdigest()[:8] if summary else "null"
+
     logger.info(
         f"[{short_id}] Compaction summary generated: {summary_elapsed:.3f}s, "
         f"input={compaction_input_tokens}, output={compaction_output_tokens}, "
-        f"summary_len={len(summary)}"
+        f"summary_len={len(summary)}, hash={summary_hash}"
     )
 
     compaction_usage = {
@@ -349,7 +381,8 @@ async def _handle_compaction(
             return StreamingResponse(
                 _timed_streaming_wrapper(
                     convert_compaction_to_sse(claude_response, logger),
-                    short_id, req_start,
+                    short_id,
+                    req_start,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -367,21 +400,31 @@ async def _handle_compaction(
     has_tools = bool(request.tools) and len(request.tools) > 0
     client_wants_streaming = request.stream
 
-    logger.info(f"[{short_id}] Compaction: sending follow-up request (stream={client_wants_streaming})")
+    logger.info(
+        f"[{short_id}] Compaction: sending follow-up request (stream={client_wants_streaming})"
+    )
 
     if client_wants_streaming and not has_tools:
         # Streaming follow-up
         followup_request["stream"] = True
-        openai_stream = openai_client.create_chat_completion_stream(followup_request, request_id + "_followup")
+        openai_stream = openai_client.create_chat_completion_stream(
+            followup_request, request_id + "_followup"
+        )
 
         return StreamingResponse(
             _timed_streaming_wrapper(
                 stream_compaction_with_response(
-                    summary, openai_stream, request, logger,
-                    http_request, openai_client, request_id + "_followup",
+                    summary,
+                    openai_stream,
+                    request,
+                    logger,
+                    http_request,
+                    openai_client,
+                    request_id + "_followup",
                     compaction_usage,
                 ),
-                short_id, req_start,
+                short_id,
+                req_start,
             ),
             media_type="text/event-stream",
             headers={
@@ -413,8 +456,10 @@ async def _handle_compaction(
             claude_followup.get("content", []),
             request,
             claude_followup.get("stop_reason", Constants.STOP_END_TURN),
-            compaction_input_tokens, compaction_output_tokens,
-            message_input_tokens, message_output_tokens,
+            compaction_input_tokens,
+            compaction_output_tokens,
+            message_input_tokens,
+            message_output_tokens,
         )
 
         total_elapsed = time.time() - req_start
@@ -440,6 +485,7 @@ async def count_tokens(request: ClaudeTokenCountRequest, _: None = Depends(valid
     try:
         # Build a minimal ClaudeMessagesRequest to reuse the main conversion pipeline
         from src.models.claude import ClaudeMessagesRequest as _Req
+
         pseudo_request = _Req(
             model=request.model,
             max_tokens=1,  # dummy, not used for counting

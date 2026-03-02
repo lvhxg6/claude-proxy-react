@@ -1,10 +1,11 @@
 import json
-from typing import Dict, Any, List
-from src.core.constants import Constants
-from src.models.claude import ClaudeMessagesRequest, ClaudeMessage, ClaudeContentBlockCompaction
-from src.core.config import config
-from src.core.tokenizer import GLMTokenizer
 import logging
+from typing import Any, Dict, List
+
+from src.core.config import config
+from src.core.constants import Constants
+from src.core.tokenizer import GLMTokenizer
+from src.models.claude import ClaudeContentBlockCompaction, ClaudeMessage, ClaudeMessagesRequest
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,8 @@ def _find_compaction_boundary(messages: List[ClaudeMessage]) -> tuple:
     Returns:
         (boundary_index, summary_text) if found, (-1, None) otherwise.
     """
+    import hashlib
+
     for i in range(len(messages) - 1, -1, -1):
         msg = messages[i]
         if msg.role != Constants.ROLE_ASSISTANT:
@@ -133,6 +136,17 @@ def _find_compaction_boundary(messages: List[ClaudeMessage]) -> tuple:
                 hasattr(block, "type") and block.type == "compaction"
             ):
                 summary = getattr(block, "content", None)
+                # Log received compaction block for observability
+                if summary:
+                    summary_hash = hashlib.md5(summary.encode()).hexdigest()[:8]
+                    logger.info(
+                        f"Compaction block received: index={i}, "
+                        f"summary_len={len(summary)}, hash={summary_hash}"
+                    )
+                else:
+                    logger.warning(
+                        f"Compaction block received with null/empty content at index={i}"
+                    )
                 return i, summary
     return -1, None
 
@@ -167,10 +181,22 @@ def convert_claude_to_openai(
     # === Compaction boundary pruning ===
     # Per Anthropic protocol: find the latest compaction block and discard
     # all messages before it. The compaction summary replaces prior history.
+    # SAFETY: Only prune if summary is non-empty to prevent context loss.
     messages = list(claude_request.messages)
     boundary_index, summary = _find_compaction_boundary(messages)
     if boundary_index >= 0:
-        messages = _prune_messages_at_boundary(messages, boundary_index, summary)
+        if summary and summary.strip():
+            messages = _prune_messages_at_boundary(messages, boundary_index, summary)
+            logger.info(
+                f"Compaction boundary applied: boundary_index={boundary_index}, "
+                f"summary_len={len(summary)}"
+            )
+        else:
+            logger.warning(
+                f"Compaction boundary found at index {boundary_index} but summary is "
+                f"empty/null. Skipping pruning to preserve context. This may indicate "
+                f"a client-side issue with compaction_delta handling or persistence."
+            )
 
     # Convert messages
     openai_messages = []
@@ -185,17 +211,12 @@ def convert_claude_to_openai(
             for block in claude_request.system:
                 if hasattr(block, "type") and block.type == Constants.CONTENT_TEXT:
                     text_parts.append(block.text)
-                elif (
-                    isinstance(block, dict)
-                    and block.get("type") == Constants.CONTENT_TEXT
-                ):
+                elif isinstance(block, dict) and block.get("type") == Constants.CONTENT_TEXT:
                     text_parts.append(block.get("text", ""))
             system_text = "\n\n".join(text_parts)
 
         if system_text.strip():
-            openai_messages.append(
-                {"role": Constants.ROLE_SYSTEM, "content": system_text.strip()}
-            )
+            openai_messages.append({"role": Constants.ROLE_SYSTEM, "content": system_text.strip()})
 
     # Process Claude messages (using pruned messages if compaction boundary was found)
     i = 0
@@ -299,7 +320,7 @@ def convert_claude_user_message(msg: ClaudeMessage) -> Dict[str, Any]:
     """Convert Claude user message to OpenAI format."""
     if msg.content is None:
         return {"role": Constants.ROLE_USER, "content": ""}
-    
+
     if isinstance(msg.content, str):
         return {"role": Constants.ROLE_USER, "content": msg.content}
 
@@ -338,7 +359,7 @@ def convert_claude_assistant_message(msg: ClaudeMessage) -> Dict[str, Any]:
 
     if msg.content is None:
         return {"role": Constants.ROLE_ASSISTANT, "content": ""}
-    
+
     if isinstance(msg.content, str):
         return {"role": Constants.ROLE_ASSISTANT, "content": msg.content}
 
