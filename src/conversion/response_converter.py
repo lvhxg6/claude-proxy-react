@@ -1,7 +1,9 @@
 import json
 import re
 import uuid
+
 from fastapi import HTTPException, Request
+
 from src.core.constants import Constants
 from src.models.claude import ClaudeMessagesRequest
 
@@ -21,7 +23,7 @@ def parse_glm_react_format(content: str) -> list:
     logger.debug(f"Content preview (first 500 chars): {content[:500]}")
 
     # Find all <tool_call>...</tool_call> blocks (case-insensitive, allow whitespace)
-    tool_call_pattern = r'<tool_call>\s*(.*?)\s*</tool_call>'
+    tool_call_pattern = r"<tool_call>\s*(.*?)\s*</tool_call>"
     matches = re.findall(tool_call_pattern, content, re.DOTALL | re.IGNORECASE)
 
     logger.debug(f"Found {len(matches)} tool_call blocks")
@@ -32,7 +34,7 @@ def parse_glm_react_format(content: str) -> list:
 
             # Extract function name - stop at first < or whitespace
             # This handles cases where function name is immediately followed by <arg_key>
-            name_match = re.search(r'^([a-zA-Z_][a-zA-Z0-9_]*)(?=\s|<|$)', match.strip())
+            name_match = re.search(r"^([a-zA-Z_][a-zA-Z0-9_]*)(?=\s|<|$)", match.strip())
             if not name_match:
                 logger.warning(f"Could not extract function name from tool_call block {i}")
                 logger.debug(f"Block content: {match}")
@@ -42,7 +44,7 @@ def parse_glm_react_format(content: str) -> list:
             logger.debug(f"Extracted function name: {function_name}")
 
             # Extract all arg_key/arg_value pairs (allow whitespace, case-insensitive)
-            arg_pattern = r'<arg_key>\s*(.*?)\s*</arg_key>\s*<arg_value>\s*(.*?)\s*</arg_value>'
+            arg_pattern = r"<arg_key>\s*(.*?)\s*</arg_key>\s*<arg_value>\s*(.*?)\s*</arg_value>"
             args = re.findall(arg_pattern, match, re.DOTALL | re.IGNORECASE)
 
             logger.debug(f"Found {len(args)} argument pairs")
@@ -67,14 +69,16 @@ def parse_glm_react_format(content: str) -> list:
 
             logger.debug(f"Final arguments: {json.dumps(arguments, ensure_ascii=False)[:200]}")
 
-            tool_calls.append({
-                'id': f'toolu_{uuid.uuid4().hex[:24]}',
-                'type': 'function',
-                'function': {
-                    'name': function_name,
-                    'arguments': json.dumps(arguments, ensure_ascii=False)
+            tool_calls.append(
+                {
+                    "id": f"toolu_{uuid.uuid4().hex[:24]}",
+                    "type": "function",
+                    "function": {
+                        "name": function_name,
+                        "arguments": json.dumps(arguments, ensure_ascii=False),
+                    },
                 }
-            })
+            )
 
             logger.debug(f"Successfully parsed tool call: {function_name}")
 
@@ -82,6 +86,7 @@ def parse_glm_react_format(content: str) -> list:
             logger.error(f"Error parsing tool_call block {i}: {e}")
             logger.error(f"Block content: {match[:500]}")
             import traceback
+
             logger.error(traceback.format_exc())
             continue
 
@@ -101,19 +106,19 @@ def parse_tool_name_and_args(tool_name: str) -> tuple:
         return tool_name, {}
 
     # Check if name contains ReAct format
-    if '<arg_key>' not in tool_name:
+    if "<arg_key>" not in tool_name:
         # No ReAct format, return as-is
         return tool_name, {}
 
     # Extract function name - stop at first < or whitespace
-    name_match = re.search(r'^([a-zA-Z_][a-zA-Z0-9_]*)(?=\s|<|$)', tool_name.strip())
+    name_match = re.search(r"^([a-zA-Z_][a-zA-Z0-9_]*)(?=\s|<|$)", tool_name.strip())
     if not name_match:
         return tool_name, {}
 
     cleaned_name = name_match.group(1).strip()
 
     # Extract all arg_key/arg_value pairs
-    arg_pattern = r'<arg_key>\s*(.*?)\s*</arg_key>\s*<arg_value>\s*(.*?)\s*</arg_value>'
+    arg_pattern = r"<arg_key>\s*(.*?)\s*</arg_key>\s*<arg_value>\s*(.*?)\s*</arg_value>"
     args = re.findall(arg_pattern, tool_name, re.DOTALL | re.IGNORECASE)
 
     # Build arguments dict
@@ -147,13 +152,16 @@ import logging
 
 response_logger = logging.getLogger(__name__)
 
+
 def convert_openai_to_claude_response(
     openai_response: dict, original_request: ClaudeMessagesRequest
 ) -> dict:
     """Convert OpenAI response to Claude format."""
 
     response_logger.debug(f"=== Converting OpenAI Response to Claude Format ===")
-    response_logger.debug(f"OpenAI Response: {json.dumps(openai_response, indent=2, ensure_ascii=False)}")
+    response_logger.debug(
+        f"OpenAI Response: {json.dumps(openai_response, indent=2, ensure_ascii=False)}"
+    )
 
     # Extract response data
     choices = openai_response.get("choices", [])
@@ -173,10 +181,12 @@ def convert_openai_to_claude_response(
     response_logger.debug(f"=== Tool Call Detection ===")
     response_logger.debug(f"text_content length: {len(text_content) if text_content else 0}")
     response_logger.debug(f"tool_calls count (from OpenAI): {len(tool_calls)}")
-    response_logger.debug(f"Has <tool_call> tag: {'<tool_call>' in text_content if text_content else False}")
+    response_logger.debug(
+        f"Has <tool_call> tag: {'<tool_call>' in text_content if text_content else False}"
+    )
 
     # Parse ReAct format if tool_calls is empty but content has <tool_call> tags
-    if text_content and not tool_calls and '<tool_call>' in text_content:
+    if text_content and not tool_calls and "<tool_call>" in text_content:
         response_logger.debug(f"Attempting ReAct format parsing...")
         response_logger.debug(f"Content preview: {text_content[:500]}")
 
@@ -186,9 +196,15 @@ def convert_openai_to_claude_response(
         tool_calls.extend(react_tool_calls)
 
         # Clean content: remove <think> and <tool_call> tags
-        cleaned_content = re.sub(r'<think>.*?</think>', '', text_content, flags=re.DOTALL | re.IGNORECASE)
-        cleaned_content = re.sub(r'</think>', '', cleaned_content, flags=re.IGNORECASE)  # Remove standalone closing tags
-        cleaned_content = re.sub(r'<tool_call>.*?</tool_call>', '', cleaned_content, flags=re.DOTALL | re.IGNORECASE)
+        cleaned_content = re.sub(
+            r"<think>.*?</think>", "", text_content, flags=re.DOTALL | re.IGNORECASE
+        )
+        cleaned_content = re.sub(
+            r"</think>", "", cleaned_content, flags=re.IGNORECASE
+        )  # Remove standalone closing tags
+        cleaned_content = re.sub(
+            r"<tool_call>.*?</tool_call>", "", cleaned_content, flags=re.DOTALL | re.IGNORECASE
+        )
         text_content = cleaned_content.strip()
 
         response_logger.debug(f"Cleaned text_content length: {len(text_content)}")
@@ -221,13 +237,19 @@ def convert_openai_to_claude_response(
             # Merge extracted arguments with existing arguments
             if not arguments and extracted_args:
                 arguments = extracted_args
-                response_logger.debug(f"Extracted {len(extracted_args)} arguments from tool name: {list(extracted_args.keys())}")
+                response_logger.debug(
+                    f"Extracted {len(extracted_args)} arguments from tool name: {list(extracted_args.keys())}"
+                )
             elif extracted_args:
                 arguments.update(extracted_args)
-                response_logger.debug(f"Merged {len(extracted_args)} extracted arguments: {list(extracted_args.keys())}")
+                response_logger.debug(
+                    f"Merged {len(extracted_args)} extracted arguments: {list(extracted_args.keys())}"
+                )
 
             if raw_name != cleaned_name:
-                response_logger.debug(f"Cleaned tool name in non-streaming: '{raw_name}' -> '{cleaned_name}'")
+                response_logger.debug(
+                    f"Cleaned tool name in non-streaming: '{raw_name}' -> '{cleaned_name}'"
+                )
 
             content_blocks.append(
                 {
@@ -275,14 +297,14 @@ def convert_openai_to_claude_response(
         "stop_sequence": None,
         "usage": {
             "input_tokens": openai_response.get("usage", {}).get("prompt_tokens", 0),
-            "output_tokens": openai_response.get("usage", {}).get(
-                "completion_tokens", 0
-            ),
+            "output_tokens": openai_response.get("usage", {}).get("completion_tokens", 0),
         },
     }
 
     response_logger.debug(f"=== Final Claude Response ===")
-    response_logger.debug(f"Claude Response: {json.dumps(claude_response, indent=2, ensure_ascii=False)}")
+    response_logger.debug(
+        f"Claude Response: {json.dumps(claude_response, indent=2, ensure_ascii=False)}"
+    )
     response_logger.debug(f"stop_reason: {stop_reason}, has_tool_use: {has_tool_use}")
 
     return claude_response
@@ -322,9 +344,7 @@ async def convert_openai_streaming_to_claude(
                         if not choices:
                             continue
                     except json.JSONDecodeError as e:
-                        logger.warning(
-                            f"Failed to parse chunk: {chunk_data}, error: {e}"
-                        )
+                        logger.warning(f"Failed to parse chunk: {chunk_data}, error: {e}")
                         continue
 
                     choice = choices[0]
@@ -339,7 +359,7 @@ async def convert_openai_streaming_to_claude(
                     if "tool_calls" in delta:
                         for tc_delta in delta["tool_calls"]:
                             tc_index = tc_delta.get("index", 0)
-                            
+
                             # Initialize tool call tracking by index if not exists
                             if tc_index not in current_tool_calls:
                                 current_tool_calls[tc_index] = {
@@ -348,15 +368,15 @@ async def convert_openai_streaming_to_claude(
                                     "args_buffer": "",
                                     "json_sent": False,
                                     "claude_index": None,
-                                    "started": False
+                                    "started": False,
                                 }
-                            
+
                             tool_call = current_tool_calls[tc_index]
-                            
+
                             # Update tool call ID if provided
                             if tc_delta.get("id"):
                                 tool_call["id"] = tc_delta["id"]
-                            
+
                             # Update function name and start content block if we have both id and name
                             function_data = tc_delta.get(Constants.TOOL_FUNCTION, {})
                             if function_data.get("name"):
@@ -365,28 +385,38 @@ async def convert_openai_streaming_to_claude(
                                 cleaned_name, extracted_args = parse_tool_name_and_args(raw_name)
 
                                 if raw_name != cleaned_name:
-                                    logger.debug(f"Cleaned tool name: '{raw_name}' -> '{cleaned_name}'")
+                                    logger.debug(
+                                        f"Cleaned tool name: '{raw_name}' -> '{cleaned_name}'"
+                                    )
 
                                 tool_call["name"] = cleaned_name
 
                                 # If we extracted arguments from the name, add them to args_buffer
                                 if extracted_args:
-                                    tool_call["args_buffer"] = json.dumps(extracted_args, ensure_ascii=False)
-                                    logger.debug(f"Extracted {len(extracted_args)} arguments from tool name: {list(extracted_args.keys())}")
-                            
+                                    tool_call["args_buffer"] = json.dumps(
+                                        extracted_args, ensure_ascii=False
+                                    )
+                                    logger.debug(
+                                        f"Extracted {len(extracted_args)} arguments from tool name: {list(extracted_args.keys())}"
+                                    )
+
                             # Start content block when we have complete initial data
-                            if (tool_call["id"] and tool_call["name"] and not tool_call["started"]):
+                            if tool_call["id"] and tool_call["name"] and not tool_call["started"]:
                                 tool_block_counter += 1
                                 claude_index = text_block_index + tool_block_counter
                                 tool_call["claude_index"] = claude_index
                                 tool_call["started"] = True
-                                
+
                                 yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': claude_index, 'content_block': {'type': Constants.CONTENT_TOOL_USE, 'id': tool_call['id'], 'name': tool_call['name'], 'input': {}}}, ensure_ascii=False)}\n\n"
-                            
+
                             # Handle function arguments
-                            if "arguments" in function_data and tool_call["started"] and function_data["arguments"] is not None:
+                            if (
+                                "arguments" in function_data
+                                and tool_call["started"]
+                                and function_data["arguments"] is not None
+                            ):
                                 tool_call["args_buffer"] += function_data["arguments"]
-                                
+
                                 # Try to parse complete JSON and send delta when we have valid JSON
                                 try:
                                     json.loads(tool_call["args_buffer"])
@@ -484,21 +514,21 @@ async def convert_openai_streaming_to_claude_with_cancellation(
                         usage = chunk.get("usage", None)
                         if usage:
                             cache_read_input_tokens = 0
-                            prompt_tokens_details = usage.get('prompt_tokens_details', {})
+                            prompt_tokens_details = usage.get("prompt_tokens_details", {})
                             if prompt_tokens_details:
-                                cache_read_input_tokens = prompt_tokens_details.get('cached_tokens', 0)
+                                cache_read_input_tokens = prompt_tokens_details.get(
+                                    "cached_tokens", 0
+                                )
                             usage_data = {
-                                'input_tokens': usage.get('prompt_tokens', 0),
-                                'output_tokens': usage.get('completion_tokens', 0),
-                                'cache_read_input_tokens': cache_read_input_tokens
+                                "input_tokens": usage.get("prompt_tokens", 0),
+                                "output_tokens": usage.get("completion_tokens", 0),
+                                "cache_read_input_tokens": cache_read_input_tokens,
                             }
                         choices = chunk.get("choices", [])
                         if not choices:
                             continue
                     except json.JSONDecodeError as e:
-                        logger.warning(
-                            f"Failed to parse chunk: {chunk_data}, error: {e}"
-                        )
+                        logger.warning(f"Failed to parse chunk: {chunk_data}, error: {e}")
                         continue
 
                     choice = choices[0]
@@ -514,7 +544,9 @@ async def convert_openai_streaming_to_claude_with_cancellation(
                         content_buffer += delta["content"]
 
                         # Detect ReAct format
-                        if not is_react_format and ('<think>' in content_buffer or '<tool_call>' in content_buffer):
+                        if not is_react_format and (
+                            "<think>" in content_buffer or "<tool_call>" in content_buffer
+                        ):
                             is_react_format = True
 
                         # If not ReAct format, send text delta immediately
@@ -526,7 +558,7 @@ async def convert_openai_streaming_to_claude_with_cancellation(
                         logger.debug(f"Received tool_calls delta: {delta['tool_calls']}")
                         for tc_delta in delta["tool_calls"]:
                             tc_index = tc_delta.get("index", 0)
-                            
+
                             # Initialize tool call tracking by index if not exists
                             if tc_index not in current_tool_calls:
                                 current_tool_calls[tc_index] = {
@@ -535,15 +567,15 @@ async def convert_openai_streaming_to_claude_with_cancellation(
                                     "args_buffer": "",
                                     "json_sent": False,
                                     "claude_index": None,
-                                    "started": False
+                                    "started": False,
                                 }
-                            
+
                             tool_call = current_tool_calls[tc_index]
-                            
+
                             # Update tool call ID if provided
                             if tc_delta.get("id"):
                                 tool_call["id"] = tc_delta["id"]
-                            
+
                             # Update function name and start content block if we have both id and name
                             function_data = tc_delta.get(Constants.TOOL_FUNCTION, {})
                             if function_data.get("name"):
@@ -552,28 +584,38 @@ async def convert_openai_streaming_to_claude_with_cancellation(
                                 cleaned_name, extracted_args = parse_tool_name_and_args(raw_name)
 
                                 if raw_name != cleaned_name:
-                                    logger.debug(f"Cleaned tool name: '{raw_name}' -> '{cleaned_name}'")
+                                    logger.debug(
+                                        f"Cleaned tool name: '{raw_name}' -> '{cleaned_name}'"
+                                    )
 
                                 tool_call["name"] = cleaned_name
 
                                 # If we extracted arguments from the name, add them to args_buffer
                                 if extracted_args:
-                                    tool_call["args_buffer"] = json.dumps(extracted_args, ensure_ascii=False)
-                                    logger.debug(f"Extracted {len(extracted_args)} arguments from tool name: {list(extracted_args.keys())}")
-                            
+                                    tool_call["args_buffer"] = json.dumps(
+                                        extracted_args, ensure_ascii=False
+                                    )
+                                    logger.debug(
+                                        f"Extracted {len(extracted_args)} arguments from tool name: {list(extracted_args.keys())}"
+                                    )
+
                             # Start content block when we have complete initial data
-                            if (tool_call["id"] and tool_call["name"] and not tool_call["started"]):
+                            if tool_call["id"] and tool_call["name"] and not tool_call["started"]:
                                 tool_block_counter += 1
                                 claude_index = text_block_index + tool_block_counter
                                 tool_call["claude_index"] = claude_index
                                 tool_call["started"] = True
-                                
+
                                 yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': claude_index, 'content_block': {'type': Constants.CONTENT_TOOL_USE, 'id': tool_call['id'], 'name': tool_call['name'], 'input': {}}}, ensure_ascii=False)}\n\n"
-                            
+
                             # Handle function arguments
-                            if "arguments" in function_data and tool_call["started"] and function_data["arguments"] is not None:
+                            if (
+                                "arguments" in function_data
+                                and tool_call["started"]
+                                and function_data["arguments"] is not None
+                            ):
                                 tool_call["args_buffer"] += function_data["arguments"]
-                                
+
                                 # Try to parse complete JSON and send delta when we have valid JSON
                                 try:
                                     json.loads(tool_call["args_buffer"])
@@ -591,7 +633,9 @@ async def convert_openai_streaming_to_claude_with_cancellation(
                             final_stop_reason = Constants.STOP_MAX_TOKENS
                         elif finish_reason in ["tool_calls", "function_call"]:
                             final_stop_reason = Constants.STOP_TOOL_USE
-                            logger.debug(f"Setting stop_reason to 'tool_use' based on finish_reason: {finish_reason}")
+                            logger.debug(
+                                f"Setting stop_reason to 'tool_use' based on finish_reason: {finish_reason}"
+                            )
                         elif finish_reason == "stop":
                             final_stop_reason = Constants.STOP_END_TURN
                         else:
@@ -599,11 +643,15 @@ async def convert_openai_streaming_to_claude_with_cancellation(
 
         # Process ReAct format content after stream ends
         logger.debug(f"=== Stream End: ReAct Format Processing ===")
-        logger.debug(f"is_react_format={is_react_format}, content_buffer_len={len(content_buffer) if content_buffer else 0}")
+        logger.debug(
+            f"is_react_format={is_react_format}, content_buffer_len={len(content_buffer) if content_buffer else 0}"
+        )
         if content_buffer:
             logger.debug(f"content_buffer contains <tool_call>: {'<tool_call>' in content_buffer}")
             logger.debug(f"content_buffer contains <think>: {'<think>' in content_buffer}")
-            logger.debug(f"content_buffer preview (last 500 chars): {content_buffer[-500:] if len(content_buffer) > 500 else content_buffer}")
+            logger.debug(
+                f"content_buffer preview (last 500 chars): {content_buffer[-500:] if len(content_buffer) > 500 else content_buffer}"
+            )
 
         if is_react_format and content_buffer:
             logger.debug(f"Processing ReAct format content from stream...")
@@ -613,9 +661,15 @@ async def convert_openai_streaming_to_claude_with_cancellation(
             logger.debug(f"Parsed {len(react_tool_calls)} tool calls from ReAct format content")
 
             # Clean content: remove <think> and <tool_call> tags (case-insensitive)
-            cleaned_content = re.sub(r'<think>.*?</think>', '', content_buffer, flags=re.DOTALL | re.IGNORECASE)
-            cleaned_content = re.sub(r'</think>', '', cleaned_content, flags=re.IGNORECASE)  # Remove standalone closing tags
-            cleaned_content = re.sub(r'<tool_call>.*?</tool_call>', '', cleaned_content, flags=re.DOTALL | re.IGNORECASE)
+            cleaned_content = re.sub(
+                r"<think>.*?</think>", "", content_buffer, flags=re.DOTALL | re.IGNORECASE
+            )
+            cleaned_content = re.sub(
+                r"</think>", "", cleaned_content, flags=re.IGNORECASE
+            )  # Remove standalone closing tags
+            cleaned_content = re.sub(
+                r"<tool_call>.*?</tool_call>", "", cleaned_content, flags=re.DOTALL | re.IGNORECASE
+            )
             cleaned_content = cleaned_content.strip()
 
             logger.debug(f"Cleaned content length: {len(cleaned_content)}")
@@ -630,13 +684,13 @@ async def convert_openai_streaming_to_claude_with_cancellation(
                 tool_block_counter += 1
                 claude_index = text_block_index + tool_block_counter
 
-                function_data = tool_call.get('function', {})
-                tool_id = tool_call.get('id', f'toolu_{uuid.uuid4().hex[:24]}')
-                tool_name = function_data.get('name', '')
+                function_data = tool_call.get("function", {})
+                tool_id = tool_call.get("id", f"toolu_{uuid.uuid4().hex[:24]}")
+                tool_name = function_data.get("name", "")
 
                 # Parse arguments
                 try:
-                    arguments = json.loads(function_data.get('arguments', ''))
+                    arguments = json.loads(function_data.get("arguments", ""))
                 except json.JSONDecodeError:
                     arguments = {}
 
@@ -653,7 +707,9 @@ async def convert_openai_streaming_to_claude_with_cancellation(
             # Update stop reason if we sent tool calls (moved outside the loop)
             if react_tool_calls:
                 final_stop_reason = Constants.STOP_TOOL_USE
-                logger.debug(f"ReAct format: parsed {len(react_tool_calls)} tool calls, setting stop_reason to 'tool_use'")
+                logger.debug(
+                    f"ReAct format: parsed {len(react_tool_calls)} tool calls, setting stop_reason to 'tool_use'"
+                )
 
     except HTTPException as e:
         # Handle cancellation
@@ -690,7 +746,9 @@ async def convert_openai_streaming_to_claude_with_cancellation(
         if tool_data.get("started") and tool_data.get("claude_index") is not None:
             yield f"event: {Constants.EVENT_CONTENT_BLOCK_STOP}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_STOP, 'index': tool_data['claude_index']}, ensure_ascii=False)}\n\n"
 
-    logger.debug(f"Sending message_delta with stop_reason: {final_stop_reason}, current_tool_calls count: {len(current_tool_calls)}")
+    logger.debug(
+        f"Sending message_delta with stop_reason: {final_stop_reason}, current_tool_calls count: {len(current_tool_calls)}"
+    )
     yield f"event: {Constants.EVENT_MESSAGE_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_DELTA, 'delta': {'stop_reason': final_stop_reason, 'stop_sequence': None}, 'usage': usage_data}, ensure_ascii=False)}\n\n"
     yield f"event: {Constants.EVENT_MESSAGE_STOP}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_STOP}, ensure_ascii=False)}\n\n"
 
@@ -702,13 +760,15 @@ async def convert_non_streaming_to_sse(claude_response: dict, logger):
     but the client expects streaming format.
     """
 
-    message_id = claude_response.get('id', f'msg_{uuid.uuid4().hex[:24]}')
-    model = claude_response.get('model', '')
-    content_blocks = claude_response.get('content', [])
-    stop_reason = claude_response.get('stop_reason', Constants.STOP_END_TURN)
-    usage = claude_response.get('usage', {'input_tokens': 0, 'output_tokens': 0})
+    message_id = claude_response.get("id", f"msg_{uuid.uuid4().hex[:24]}")
+    model = claude_response.get("model", "")
+    content_blocks = claude_response.get("content", [])
+    stop_reason = claude_response.get("stop_reason", Constants.STOP_END_TURN)
+    usage = claude_response.get("usage", {"input_tokens": 0, "output_tokens": 0})
 
-    logger.debug(f"Converting non-streaming response to SSE format: {len(content_blocks)} content blocks")
+    logger.debug(
+        f"Converting non-streaming response to SSE format: {len(content_blocks)} content blocks"
+    )
 
     # 1. Send message_start event
     yield f"event: {Constants.EVENT_MESSAGE_START}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_START, 'message': {'id': message_id, 'type': 'message', 'role': Constants.ROLE_ASSISTANT, 'model': model, 'content': [], 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 0, 'output_tokens': 0}}}, ensure_ascii=False)}\n\n"
@@ -718,11 +778,11 @@ async def convert_non_streaming_to_sse(claude_response: dict, logger):
 
     # 3. Process each content block
     for index, block in enumerate(content_blocks):
-        block_type = block.get('type')
+        block_type = block.get("type")
 
         if block_type == Constants.CONTENT_TEXT:
             # Text content block
-            text = block.get('text', '')
+            text = block.get("text", "")
 
             # Send content_block_start
             yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': index, 'content_block': {'type': Constants.CONTENT_TEXT, 'text': ''}}, ensure_ascii=False)}\n\n"
@@ -736,9 +796,9 @@ async def convert_non_streaming_to_sse(claude_response: dict, logger):
 
         elif block_type == Constants.CONTENT_TOOL_USE:
             # Tool use content block
-            tool_id = block.get('id', f'toolu_{uuid.uuid4().hex[:24]}')
-            tool_name = block.get('name', '')
-            tool_input = block.get('input', {})
+            tool_id = block.get("id", f"toolu_{uuid.uuid4().hex[:24]}")
+            tool_name = block.get("name", "")
+            tool_input = block.get("input", {})
 
             # Send content_block_start
             yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': index, 'content_block': {'type': Constants.CONTENT_TOOL_USE, 'id': tool_id, 'name': tool_name, 'input': {}}}, ensure_ascii=False)}\n\n"
@@ -752,7 +812,7 @@ async def convert_non_streaming_to_sse(claude_response: dict, logger):
 
         elif block_type == Constants.CONTENT_COMPACTION:
             # Compaction content block
-            summary = block.get('content', '')
+            summary = block.get("content", "")
 
             yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': index, 'content_block': {'type': Constants.CONTENT_COMPACTION, 'content': ''}}, ensure_ascii=False)}\n\n"
 
@@ -774,11 +834,11 @@ async def convert_compaction_to_sse(claude_response: dict, logger):
 
     Used when pause_after_compaction=true.
     """
-    message_id = claude_response.get('id', f'msg_{uuid.uuid4().hex[:24]}')
-    model = claude_response.get('model', '')
-    content_blocks = claude_response.get('content', [])
-    stop_reason = claude_response.get('stop_reason', Constants.STOP_COMPACTION)
-    usage = claude_response.get('usage', {'input_tokens': 0, 'output_tokens': 0})
+    message_id = claude_response.get("id", f"msg_{uuid.uuid4().hex[:24]}")
+    model = claude_response.get("model", "")
+    content_blocks = claude_response.get("content", [])
+    stop_reason = claude_response.get("stop_reason", Constants.STOP_COMPACTION)
+    usage = claude_response.get("usage", {"input_tokens": 0, "output_tokens": 0})
 
     # 1. message_start
     yield f"event: {Constants.EVENT_MESSAGE_START}\ndata: {json.dumps({'type': Constants.EVENT_MESSAGE_START, 'message': {'id': message_id, 'type': 'message', 'role': Constants.ROLE_ASSISTANT, 'model': model, 'content': [], 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 0, 'output_tokens': 0}}}, ensure_ascii=False)}\n\n"
@@ -788,8 +848,8 @@ async def convert_compaction_to_sse(claude_response: dict, logger):
 
     # 3. compaction content block
     for index, block in enumerate(content_blocks):
-        if block.get('type') == Constants.CONTENT_COMPACTION:
-            summary = block.get('content', '')
+        if block.get("type") == Constants.CONTENT_COMPACTION:
+            summary = block.get("content", "")
 
             # content_block_start
             yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': index, 'content_block': {'type': Constants.CONTENT_COMPACTION, 'content': ''}}, ensure_ascii=False)}\n\n"
@@ -875,13 +935,15 @@ async def stream_compaction_with_response(
                         usage = chunk.get("usage", None)
                         if usage:
                             cache_read_input_tokens = 0
-                            prompt_tokens_details = usage.get('prompt_tokens_details', {})
+                            prompt_tokens_details = usage.get("prompt_tokens_details", {})
                             if prompt_tokens_details:
-                                cache_read_input_tokens = prompt_tokens_details.get('cached_tokens', 0)
+                                cache_read_input_tokens = prompt_tokens_details.get(
+                                    "cached_tokens", 0
+                                )
                             usage_data = {
-                                'input_tokens': usage.get('prompt_tokens', 0),
-                                'output_tokens': usage.get('completion_tokens', 0),
-                                'cache_read_input_tokens': cache_read_input_tokens
+                                "input_tokens": usage.get("prompt_tokens", 0),
+                                "output_tokens": usage.get("completion_tokens", 0),
+                                "cache_read_input_tokens": cache_read_input_tokens,
                             }
                         choices = chunk.get("choices", [])
                         if not choices:
@@ -898,7 +960,9 @@ async def stream_compaction_with_response(
                     if delta and "content" in delta and delta["content"] is not None:
                         content_buffer += delta["content"]
 
-                        if not is_react_format and ('<think>' in content_buffer or '<tool_call>' in content_buffer):
+                        if not is_react_format and (
+                            "<think>" in content_buffer or "<tool_call>" in content_buffer
+                        ):
                             is_react_format = True
 
                         if not is_react_format:
@@ -911,8 +975,12 @@ async def stream_compaction_with_response(
 
                             if tc_index not in current_tool_calls:
                                 current_tool_calls[tc_index] = {
-                                    "id": None, "name": None, "args_buffer": "",
-                                    "json_sent": False, "claude_index": None, "started": False
+                                    "id": None,
+                                    "name": None,
+                                    "args_buffer": "",
+                                    "json_sent": False,
+                                    "claude_index": None,
+                                    "started": False,
                                 }
 
                             tool_call = current_tool_calls[tc_index]
@@ -926,7 +994,9 @@ async def stream_compaction_with_response(
                                 cleaned_name, extracted_args = parse_tool_name_and_args(raw_name)
                                 tool_call["name"] = cleaned_name
                                 if extracted_args:
-                                    tool_call["args_buffer"] = json.dumps(extracted_args, ensure_ascii=False)
+                                    tool_call["args_buffer"] = json.dumps(
+                                        extracted_args, ensure_ascii=False
+                                    )
 
                             if tool_call["id"] and tool_call["name"] and not tool_call["started"]:
                                 tool_block_counter += 1
@@ -936,7 +1006,11 @@ async def stream_compaction_with_response(
 
                                 yield f"event: {Constants.EVENT_CONTENT_BLOCK_START}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_START, 'index': claude_index, 'content_block': {'type': Constants.CONTENT_TOOL_USE, 'id': tool_call['id'], 'name': tool_call['name'], 'input': {}}}, ensure_ascii=False)}\n\n"
 
-                            if "arguments" in function_data and tool_call["started"] and function_data["arguments"] is not None:
+                            if (
+                                "arguments" in function_data
+                                and tool_call["started"]
+                                and function_data["arguments"] is not None
+                            ):
                                 tool_call["args_buffer"] += function_data["arguments"]
                                 try:
                                     json.loads(tool_call["args_buffer"])
@@ -956,9 +1030,13 @@ async def stream_compaction_with_response(
         if is_react_format and content_buffer:
             react_tool_calls = parse_glm_react_format(content_buffer)
 
-            cleaned_content = re.sub(r'<think>.*?</think>', '', content_buffer, flags=re.DOTALL | re.IGNORECASE)
-            cleaned_content = re.sub(r'</think>', '', cleaned_content, flags=re.IGNORECASE)
-            cleaned_content = re.sub(r'<tool_call>.*?</tool_call>', '', cleaned_content, flags=re.DOTALL | re.IGNORECASE)
+            cleaned_content = re.sub(
+                r"<think>.*?</think>", "", content_buffer, flags=re.DOTALL | re.IGNORECASE
+            )
+            cleaned_content = re.sub(r"</think>", "", cleaned_content, flags=re.IGNORECASE)
+            cleaned_content = re.sub(
+                r"<tool_call>.*?</tool_call>", "", cleaned_content, flags=re.DOTALL | re.IGNORECASE
+            )
             cleaned_content = cleaned_content.strip()
 
             if cleaned_content:
@@ -967,11 +1045,11 @@ async def stream_compaction_with_response(
             for tool_call_data in react_tool_calls:
                 tool_block_counter += 1
                 claude_index = text_block_index + tool_block_counter
-                function_data = tool_call_data.get('function', {})
-                tool_id = tool_call_data.get('id', f'toolu_{uuid.uuid4().hex[:24]}')
-                tool_name = function_data.get('name', '')
+                function_data = tool_call_data.get("function", {})
+                tool_id = tool_call_data.get("id", f"toolu_{uuid.uuid4().hex[:24]}")
+                tool_name = function_data.get("name", "")
                 try:
-                    arguments = json.loads(function_data.get('arguments', ''))
+                    arguments = json.loads(function_data.get("arguments", ""))
                 except json.JSONDecodeError:
                     arguments = {}
 
@@ -986,6 +1064,7 @@ async def stream_compaction_with_response(
     except Exception as e:
         logger.error(f"Compaction+response streaming error: {e}")
         import traceback
+
         logger.error(traceback.format_exc())
         error_event = {
             "type": "error",
@@ -1005,7 +1084,8 @@ async def stream_compaction_with_response(
     # Build combined usage with iterations
     combined_usage = {
         "input_tokens": usage_data.get("input_tokens", 0),
-        "output_tokens": compaction_usage.get("output_tokens", 0) + usage_data.get("output_tokens", 0),
+        "output_tokens": compaction_usage.get("output_tokens", 0)
+        + usage_data.get("output_tokens", 0),
         "iterations": [
             {
                 "type": "compaction",

@@ -1,10 +1,12 @@
 """GLM-4.7 tokenizer management with lazy loading and caching."""
+
 import logging
 import os
 from pathlib import Path
 from typing import Optional
-from tokenizers import Tokenizer
+
 from huggingface_hub import hf_hub_download
+from tokenizers import Tokenizer
 
 logger = logging.getLogger(__name__)
 

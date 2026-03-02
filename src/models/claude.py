@@ -1,13 +1,17 @@
+from typing import Any, Dict, List, Literal, Optional, Union
+
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional, Union, Literal
+
 
 class ClaudeContentBlockText(BaseModel):
     type: Literal["text"]
     text: str
 
+
 class ClaudeContentBlockImage(BaseModel):
     type: Literal["image"]
     source: Dict[str, Any]
+
 
 class ClaudeContentBlockToolUse(BaseModel):
     type: Literal["tool_use"]
@@ -15,10 +19,12 @@ class ClaudeContentBlockToolUse(BaseModel):
     name: str
     input: Dict[str, Any]
 
+
 class ClaudeContentBlockToolResult(BaseModel):
     type: Literal["tool_result"]
     tool_use_id: str
     content: Union[str, List[Dict[str, Any]], Dict[str, Any]]
+
 
 class ClaudeContentBlockCompaction(BaseModel):
     # Auto-compaction block returned by the proxy; may be sent back by CLI.
@@ -26,9 +32,11 @@ class ClaudeContentBlockCompaction(BaseModel):
     type: Literal["compaction"]
     content: Optional[str] = None
 
+
 class ClaudeSystemContent(BaseModel):
     type: Literal["text"]
     text: str
+
 
 class ClaudeMessage(BaseModel):
     role: Literal["user", "assistant"]
@@ -45,17 +53,21 @@ class ClaudeMessage(BaseModel):
         ],
     ]
 
+
 class ClaudeTool(BaseModel):
     name: str
     description: Optional[str] = None
     input_schema: Dict[str, Any]
 
+
 class ClaudeThinkingConfig(BaseModel):
     enabled: bool = True
+
 
 class CompactionTrigger(BaseModel):
     type: Literal["input_tokens"] = "input_tokens"
     value: int = 150000
+
 
 class CompactionEdit(BaseModel):
     type: str = "compact_20260112"
@@ -63,8 +75,10 @@ class CompactionEdit(BaseModel):
     pause_after_compaction: bool = False
     instructions: Optional[str] = None
 
+
 class ContextManagement(BaseModel):
     edits: List[CompactionEdit] = []
+
 
 class ClaudeMessagesRequest(BaseModel):
     model: str
@@ -81,6 +95,7 @@ class ClaudeMessagesRequest(BaseModel):
     tool_choice: Optional[Dict[str, Any]] = None
     thinking: Optional[ClaudeThinkingConfig] = None
     context_management: Optional[ContextManagement] = None
+
 
 class ClaudeTokenCountRequest(BaseModel):
     model: str
